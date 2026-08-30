@@ -1,0 +1,8 @@
+{
+  "id": "example.usage-meters",
+  "name": "Usage meters",
+  "version": "1.0.0",
+  "api": 1,
+  "executable": "powershell.exe",
+  "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "usage-meters.ps1"]
+}

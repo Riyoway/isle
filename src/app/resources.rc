@@ -1,0 +1,9 @@
+// Isle native resources.
+//
+// IMPORTANT: Do not embed app.manifest here as RT_MANIFEST. The manifest is
+// merged and embedded by the MSVC linker via /MANIFESTINPUT in CMakeLists.txt.
+// Adding `1 RT_MANIFEST "app.manifest"` here duplicates manifest resource ID 1
+// and causes CVTRES fatal error CVT1100.
+//
+// Future non-manifest resources (for example an application icon) can live
+// here when this file is added back to the Isle target.

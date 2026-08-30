@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://isle.dev/schemas/plugin-manifest-v1.json",
+  "title": "Isle plugin manifest",
+  "type": "object",
+  "required": ["id", "name", "version", "api", "executable"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]{2,80}$"
+    },
+    "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "version": { "type": "string", "minLength": 1, "maxLength": 32 },
+    "api": { "const": 1 },
+    "executable": { "type": "string", "minLength": 1 },
+    "args": {
+      "type": "array",
+      "items": { "type": "string" },
+      "maxItems": 32,
+      "default": []
+    }
+  }
+}
