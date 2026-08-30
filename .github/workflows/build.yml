@@ -6,27 +6,17 @@ on:
 
 jobs:
   windows:
-    strategy:
-      matrix:
-        include:
-          - arch: x64
-            preset: windows-x64-release
-            build: release
-          - arch: arm64
-            preset: windows-arm64-release
-            build: arm64-release
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - name: Configure
-        run: cmake --preset ${{ matrix.preset }}
+        run: cmake --preset windows-x64-release
       - name: Build
-        run: cmake --build --preset ${{ matrix.build }}
+        run: cmake --build --preset release
       - name: Test
-        if: matrix.arch == 'x64'
         run: ctest --test-dir build/x64-release -C Release --output-on-failure
       - name: Upload executable
         uses: actions/upload-artifact@v4
         with:
-          name: Isle-${{ matrix.arch }}
+          name: Isle-x64
           path: build/**/Release/Isle.exe
