@@ -109,7 +109,7 @@ fire_and_forget MediaProvider::refresh_async() {
         const std::wstring artist = props.Artist().empty() ? std::wstring(session_.SourceAppUserModelId().c_str()) : std::wstring(props.Artist().c_str());
 
         const std::wstring artworkKey = title + L"\n" + artist;
-        if (artworkKey != artworkKey_) {
+        if (artworkKey != artworkKey_ || !artwork_) {
             artwork_.reset();
             if (const auto thumbnail = props.Thumbnail()) {
                 const auto stream = co_await thumbnail.OpenReadAsync();
@@ -161,9 +161,7 @@ fire_and_forget MediaProvider::refresh_async() {
             {L"next", L"Next", L"\uE893"},
         };
         store_->upsert(std::move(activity));
-    } catch (...) {
-        if (store_) store_->remove(L"media.now-playing");
-    }
+    } catch (...) {}
 }
 
 fire_and_forget MediaProvider::invoke_async(std::wstring actionId) {

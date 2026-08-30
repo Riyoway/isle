@@ -453,7 +453,10 @@ void OverlayWindow::update_visibility_policy() {
 
 void OverlayWindow::set_expanded(bool expanded) {
     expanded_ = expanded;
-    if (!expanded_) settingsMode_ = false;
+    if (!expanded_) {
+        settingsMode_ = false;
+        hoverBegan_ = {};
+    }
     const float s = renderState_.dpiScale;
     widthSpring_.set_target((expanded ? kExpandedWidth : (trackingMouse_ ? kHoverWidth : kCollapsedWidth)) * s);
     heightSpring_.set_target((expanded ? (settingsMode_ ? kSettingsHeight : kExpandedHeight) : kCollapsedHeight) * s);
@@ -499,8 +502,12 @@ bool OverlayWindow::foreground_is_fullscreen() const {
 bool OverlayWindow::hit_test_gear(float x, float y) const {
     const float s = renderState_.dpiScale;
     const auto rect = renderer_.island_rect(renderState_);
-    return point_in_rect(x, y, D2D1::RectF(rect.right - 48.0f * s, rect.top + 3.0f * s,
-                                           rect.right - 6.0f * s, rect.top + 47.0f * s));
+    const auto bounds = settingsMode_
+        ? D2D1::RectF(rect.right - 48.0f * s, rect.top + 3.0f * s,
+                      rect.right - 6.0f * s, rect.top + 47.0f * s)
+        : D2D1::RectF(rect.left + 6.0f * s, rect.top + 3.0f * s,
+                      rect.left + 48.0f * s, rect.top + 47.0f * s);
+    return point_in_rect(x, y, bounds);
 }
 
 int OverlayWindow::hit_test_media_action(float x, float y) const {

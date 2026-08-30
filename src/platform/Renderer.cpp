@@ -390,7 +390,7 @@ void Renderer::draw_expanded(const RenderState& state, const std::vector<Activit
     const D2D1_COLOR_F accent = media ? color_from_hex(media->accent) : D2D1::ColorF(0x64D2FF);
     smallFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
     draw_text(media ? L"NOW PLAYING" : L"ISLE", smallFormat_.Get(),
-              D2D1::RectF(rect.left + pad, rect.top + 7.0f * s,
+              D2D1::RectF(rect.left + 52.0f * s, rect.top + 7.0f * s,
                           cx, rect.top + 30.0f * s),
               D2D1::ColorF(0x8E8E93), opacity);
 
@@ -398,13 +398,21 @@ void Renderer::draw_expanded(const RenderState& state, const std::vector<Activit
     draw_text(state.timeText, smallFormat_.Get(), D2D1::RectF(cx, rect.top + 7.0f * s,
               rect.right - 52.0f * s, rect.top + 30.0f * s), D2D1::ColorF(0xD4D4D8), opacity);
     const float gearPress = state.pressedControl == 1 ? state.pressAmount : 0.0f;
-    const auto gearBase = D2D1::RectF(rect.right - 42.0f * s, rect.top + 6.0f * s,
-                                      rect.right - 10.0f * s, rect.top + 38.0f * s);
+    const auto gearBase = D2D1::RectF(rect.left + 10.0f * s, rect.top + 6.0f * s,
+                                      rect.left + 42.0f * s, rect.top + 38.0f * s);
     const auto gear = inset_rect(gearBase, gearPress * 1.8f * s);
     fill_round_rect(gear, 16.0f * s, gearPress > 0.01f ? D2D1::ColorF(0x2C2C2E) : D2D1::ColorF(0x18181B), opacity);
     stroke_round_rect(gear, 16.0f * s, D2D1::ColorF(0xFFFFFF), 0.8f * s, (0.07f + 0.09f * gearPress) * opacity);
     iconFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
     draw_text(L"\uE713", iconFormat_.Get(), gear, D2D1::ColorF(0xF4F4F5), opacity);
+
+    const float collapsePress = state.pressedControl == 0 ? state.pressAmount : 0.0f;
+    const auto collapseBase = D2D1::RectF(rect.right - 42.0f * s, rect.top + 6.0f * s,
+                                          rect.right - 10.0f * s, rect.top + 38.0f * s);
+    const auto collapse = inset_rect(collapseBase, collapsePress * 1.8f * s);
+    fill_round_rect(collapse, 16.0f * s, collapsePress > 0.01f ? D2D1::ColorF(0x2C2C2E) : D2D1::ColorF(0x18181B), opacity);
+    stroke_round_rect(collapse, 16.0f * s, D2D1::ColorF(0xFFFFFF), 0.8f * s, (0.07f + 0.09f * collapsePress) * opacity);
+    draw_text(L"\uE70D", iconFormat_.Get(), collapse, D2D1::ColorF(0xF4F4F5), opacity);
 
     if (media) {
         const auto art = D2D1::RectF(rect.left + pad, rect.top + 50.0f * s,
