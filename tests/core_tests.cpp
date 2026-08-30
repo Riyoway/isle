@@ -15,6 +15,16 @@ int main() {
     }
 
     {
+        constexpr float overflow = 100.0f;
+        constexpr double travel = 2.0;
+        constexpr double pause = 1.0;
+        if (isle::marquee_offset(0.5, overflow, travel, pause) != 0.0f ||
+            isle::marquee_offset(2.0, overflow, travel, pause) != 50.0f ||
+            isle::marquee_offset(3.5, overflow, travel, pause) != overflow ||
+            isle::marquee_offset(6.0, overflow, travel, pause) != 0.0f) return 1;
+    }
+
+    {
         isle::ActivityStore store;
         isle::Activity low;
         low.id = L"low";

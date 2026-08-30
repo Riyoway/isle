@@ -54,4 +54,19 @@ private:
     float damping_{38.0f};
 };
 
+[[nodiscard]] inline float marquee_offset(double elapsed, float overflow,
+                                           double travel, double pause = 0.9) noexcept {
+    if (overflow <= 0.0f || travel <= 0.0) return 0.0f;
+    const double cycle = pause * 2.0 + travel * 2.0;
+    const double phase = std::fmod(std::max(0.0, elapsed), cycle);
+    const auto eased = [](double value) {
+        const float t = std::clamp(static_cast<float>(value), 0.0f, 1.0f);
+        return t * t * (3.0f - 2.0f * t);
+    };
+    if (phase < pause) return 0.0f;
+    if (phase < pause + travel) return overflow * eased((phase - pause) / travel);
+    if (phase < pause * 2.0 + travel) return overflow;
+    return overflow * (1.0f - eased((phase - pause * 2.0 - travel) / travel));
+}
+
 } // namespace isle

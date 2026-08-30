@@ -1,5 +1,7 @@
 #include "Renderer.h"
 
+#include "../core/Spring.h"
+
 #include <d2d1helper.h>
 
 #include <algorithm>
@@ -357,8 +359,8 @@ void Renderer::draw_collapsed(const RenderState& state, const std::vector<Activi
                                      rect.left + 34.0f * s, rect.bottom - 6.0f * s);
         draw_artwork(*primary, art, 8.0f * s, opacity);
         bodyFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
-        draw_text(primary->title, bodyFormat_.Get(), D2D1::RectF(art.right + 9.0f * s, rect.top,
-                  rect.right - 72.0f * s, rect.bottom), D2D1::ColorF(0xF7F7F8), opacity);
+        draw_marquee_text(primary->title, bodyFormat_.Get(), D2D1::RectF(art.right + 9.0f * s, rect.top,
+                           rect.right - 72.0f * s, rect.bottom), D2D1::ColorF(0xF7F7F8), opacity);
         draw_waveform(D2D1::RectF(rect.right - 60.0f * s, rect.top + 9.0f * s,
                                   rect.right - 14.0f * s, rect.bottom - 9.0f * s),
                       accent, opacity, primary->active);
@@ -372,8 +374,8 @@ void Renderer::draw_collapsed(const RenderState& state, const std::vector<Activi
     draw_text(primary->glyph, iconFormat_.Get(), badge, accent, opacity);
 
     bodyFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
-    draw_text(primary->title, bodyFormat_.Get(), D2D1::RectF(badge.right + 9.0f * s, rect.top,
-              rect.right - 76.0f * s, rect.bottom), D2D1::ColorF(0xF7F7F8), opacity);
+    draw_marquee_text(primary->title, bodyFormat_.Get(), D2D1::RectF(badge.right + 9.0f * s, rect.top,
+                       rect.right - 76.0f * s, rect.bottom), D2D1::ColorF(0xF7F7F8), opacity);
     metricFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
     draw_text(metric_value(*primary), metricFormat_.Get(), D2D1::RectF(rect.right - 72.0f * s, rect.top,
               rect.right - 14.0f * s, rect.bottom), accent, opacity);
@@ -410,8 +412,8 @@ void Renderer::draw_expanded(const RenderState& state, const std::vector<Activit
         draw_artwork(*media, art, 24.0f * s, opacity);
 
         titleFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
-        draw_text(media->title, titleFormat_.Get(), D2D1::RectF(art.right + 16.0f * s, art.top + 9.0f * s,
-                  rect.right - pad, art.top + 40.0f * s), D2D1::ColorF(0xFAFAFA), opacity);
+        draw_marquee_text(media->title, titleFormat_.Get(), D2D1::RectF(art.right + 16.0f * s, art.top + 9.0f * s,
+                           rect.right - pad, art.top + 40.0f * s), D2D1::ColorF(0xFAFAFA), opacity);
         smallFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
         draw_text(media->subtitle, smallFormat_.Get(), D2D1::RectF(art.right + 16.0f * s, art.top + 40.0f * s,
                   rect.right - pad, art.top + 63.0f * s), D2D1::ColorF(0x8E8E93), opacity);
@@ -779,6 +781,45 @@ void Renderer::draw_progress_ring(D2D1_POINT_2F center, float radius, float thic
     if (SUCCEEDED(sink->Close())) {
         d2dContext_->DrawGeometry(geometry.Get(), accentBrush.Get(), thickness, roundStrokeStyle_.Get());
     }
+}
+
+void Renderer::draw_marquee_text(std::wstring_view text, IDWriteTextFormat* format, D2D1_RECT_F rect,
+                                 D2D1_COLOR_F color, float opacity) {
+    if (text.empty() || !format || opacity <= 0.001f) return;
+
+    const auto now = std::chrono::steady_clock::now();
+    if (std::wstring_view(marqueeText_) != text) {
+        marqueeText_ = text;
+        marqueeStarted_ = now;
+    }
+
+    ComPtr<IDWriteTextLayout> layout;
+    const float visibleWidth = rect.right - rect.left;
+    const float visibleHeight = rect.bottom - rect.top;
+    if (FAILED(dwriteFactory_->CreateTextLayout(text.data(), static_cast<UINT32>(text.size()), format,
+                                                100000.0f * formatScale_, visibleHeight, &layout))) {
+        draw_text(text, format, rect, color, opacity);
+        return;
+    }
+
+    DWRITE_TEXT_METRICS metrics{};
+    if (FAILED(layout->GetMetrics(&metrics)) || metrics.widthIncludingTrailingWhitespace <= visibleWidth) {
+        draw_text(text, format, rect, color, opacity);
+        return;
+    }
+
+    const float overflow = metrics.widthIncludingTrailingWhitespace - visibleWidth;
+    constexpr double pause = 0.9;
+    const double travel = std::max(0.8, static_cast<double>(overflow / (30.0f * formatScale_)));
+    const double elapsed = std::chrono::duration<double>(now - marqueeStarted_).count();
+    const float offset = marquee_offset(elapsed, overflow, travel, pause);
+
+    ComPtr<ID2D1SolidColorBrush> brush;
+    d2dContext_->CreateSolidColorBrush(with_alpha(color, opacity), &brush);
+    d2dContext_->PushAxisAlignedClip(rect, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+    d2dContext_->DrawTextLayout(D2D1::Point2F(rect.left - offset, rect.top), layout.Get(), brush.Get(),
+                                D2D1_DRAW_TEXT_OPTIONS_CLIP);
+    d2dContext_->PopAxisAlignedClip();
 }
 
 void Renderer::draw_text(std::wstring_view text, IDWriteTextFormat* format, D2D1_RECT_F rect,

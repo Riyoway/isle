@@ -11,6 +11,8 @@
 #include <wincodec.h>
 #include <wrl/client.h>
 
+#include <chrono>
+#include <string>
 #include <vector>
 
 namespace isle {
@@ -44,6 +46,8 @@ private:
                                  D2D1_COLOR_F color, float opacity, bool playing);
     void draw_progress_ring(D2D1_POINT_2F center, float radius, float thickness, double progress,
                             const D2D1_COLOR_F& track, const D2D1_COLOR_F& accent, float opacity);
+    void draw_marquee_text(std::wstring_view text, IDWriteTextFormat* format, D2D1_RECT_F rect,
+                           D2D1_COLOR_F color, float opacity = 1.0f);
     void draw_text(std::wstring_view text, IDWriteTextFormat* format, D2D1_RECT_F rect,
                    D2D1_COLOR_F color, float opacity = 1.0f);
     void fill_round_rect(D2D1_RECT_F rect, float radius, D2D1_COLOR_F color, float opacity = 1.0f);
@@ -80,6 +84,8 @@ private:
     Microsoft::WRL::ComPtr<IDWriteTextFormat> smallFormat_;
     Microsoft::WRL::ComPtr<IDWriteTextFormat> metricFormat_;
     Microsoft::WRL::ComPtr<IDWriteTextFormat> iconFormat_;
+    std::wstring marqueeText_;
+    std::chrono::steady_clock::time_point marqueeStarted_{};
 
     Microsoft::WRL::ComPtr<IDCompositionDevice> dcompDevice_;
     Microsoft::WRL::ComPtr<IDCompositionTarget> dcompTarget_;
