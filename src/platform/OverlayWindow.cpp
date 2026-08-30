@@ -502,12 +502,10 @@ bool OverlayWindow::foreground_is_fullscreen() const {
 bool OverlayWindow::hit_test_gear(float x, float y) const {
     const float s = renderState_.dpiScale;
     const auto rect = renderer_.island_rect(renderState_);
-    const auto bounds = settingsMode_
-        ? D2D1::RectF(rect.right - 48.0f * s, rect.top + 3.0f * s,
-                      rect.right - 6.0f * s, rect.top + 47.0f * s)
-        : D2D1::RectF(rect.left + 6.0f * s, rect.top + 3.0f * s,
-                      rect.left + 48.0f * s, rect.top + 47.0f * s);
-    return point_in_rect(x, y, bounds);
+    const float top = rect.top + (settingsMode_ ? 4.0f : 0.0f) * s;
+    const float bottom = rect.top + (settingsMode_ ? 48.0f : 42.0f) * s;
+    return point_in_rect(x, y, D2D1::RectF(rect.right - 70.0f * s, top,
+                                           rect.right - 26.0f * s, bottom));
 }
 
 int OverlayWindow::hit_test_media_action(float x, float y) const {
