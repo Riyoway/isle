@@ -7,10 +7,13 @@
 #include <d3d11_4.h>
 #include <dcomp.h>
 #include <dwrite_3.h>
+#include <endpointvolume.h>
 #include <dxgi1_6.h>
+#include <mmdeviceapi.h>
 #include <wincodec.h>
 #include <wrl/client.h>
 
+#include <array>
 #include <chrono>
 #include <string>
 #include <vector>
@@ -41,7 +44,10 @@ private:
     void draw_settings(const RenderState& state, const D2D1_RECT_F& rect);
     void draw_metric(const Activity& activity, D2D1_POINT_2F center, float radius, float scale, float opacity);
     void draw_artwork(const Activity& activity, D2D1_RECT_F rect, float radius, float opacity);
-    void draw_waveform(D2D1_RECT_F rect, D2D1_COLOR_F color, float opacity, bool active);
+    void draw_waveform(D2D1_RECT_F rect, D2D1_COLOR_F color, float opacity,
+                       bool active, bool audioReactive = false);
+    void update_audio_history(bool active);
+    [[nodiscard]] float audio_peak();
     void draw_media_control_icon(std::wstring_view action, D2D1_RECT_F rect,
                                  D2D1_COLOR_F color, float opacity, bool playing);
     void draw_progress_ring(D2D1_POINT_2F center, float radius, float thickness, double progress,
@@ -86,6 +92,10 @@ private:
     Microsoft::WRL::ComPtr<IDWriteTextFormat> iconFormat_;
     std::wstring marqueeText_;
     std::chrono::steady_clock::time_point marqueeStarted_{};
+    Microsoft::WRL::ComPtr<IMMDeviceEnumerator> audioDeviceEnumerator_;
+    Microsoft::WRL::ComPtr<IAudioMeterInformation> audioMeter_;
+    std::array<float, 32> audioHistory_{};
+    std::chrono::steady_clock::time_point lastAudioSample_{};
 
     Microsoft::WRL::ComPtr<IDCompositionDevice> dcompDevice_;
     Microsoft::WRL::ComPtr<IDCompositionTarget> dcompTarget_;

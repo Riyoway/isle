@@ -418,7 +418,8 @@ void Renderer::draw_expanded(const RenderState& state, const std::vector<Activit
         draw_text(media->subtitle, smallFormat_.Get(), D2D1::RectF(art.right + 16.0f * s, art.top + 40.0f * s,
                   rect.right - pad, art.top + 63.0f * s), D2D1::ColorF(0x8E8E93), opacity);
         draw_waveform(D2D1::RectF(art.right + 16.0f * s, art.bottom - 29.0f * s,
-                                  rect.right - pad, art.bottom - 5.0f * s), accent, opacity, media->active);
+                                  rect.right - pad, art.bottom - 5.0f * s), accent, opacity,
+                      media->active, true);
 
         const double progress = live_progress(*media);
         const float trackTop = rect.top + 177.0f * s;
@@ -686,22 +687,65 @@ void Renderer::draw_artwork(const Activity& activity, D2D1_RECT_F rect, float ra
               accent, opacity);
 }
 
-void Renderer::draw_waveform(D2D1_RECT_F rect, D2D1_COLOR_F color, float opacity, bool active) {
+void Renderer::draw_waveform(D2D1_RECT_F rect, D2D1_COLOR_F color, float opacity,
+                             bool active, bool audioReactive) {
     const float width = rect.right - rect.left;
     const float height = rect.bottom - rect.top;
     const int bars = std::max(9, static_cast<int>(std::round(width / (9.0f * formatScale_))));
     const float gap = width / static_cast<float>(bars);
     const double phase = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count() * 5.4;
+    if (audioReactive) update_audio_history(active);
     for (int i = 0; i < bars; ++i) {
-        const float strength = active
-            ? 0.22f + 0.78f * static_cast<float>(std::abs(std::sin(phase + static_cast<double>(i) * 0.86)))
-            : 0.24f + 0.13f * static_cast<float>((i * 7) % 5);
+        const std::size_t historyIndex = static_cast<std::size_t>(i) * (audioHistory_.size() - 1) /
+                                         static_cast<std::size_t>(std::max(1, bars - 1));
+        const float strength = audioReactive
+            ? 0.10f + 0.90f * audioHistory_[historyIndex]
+            : active
+                ? 0.22f + 0.78f * static_cast<float>(std::abs(std::sin(phase + static_cast<double>(i) * 0.86)))
+                : 0.24f + 0.13f * static_cast<float>((i * 7) % 5);
         const float barHeight = std::min(height, std::max(3.0f * formatScale_, height * strength));
         const float x = rect.left + gap * (static_cast<float>(i) + 0.5f);
         const auto bar = D2D1::RectF(x - 1.2f * formatScale_, (rect.top + rect.bottom - barHeight) * 0.5f,
                                      x + 1.2f * formatScale_, (rect.top + rect.bottom + barHeight) * 0.5f);
         fill_round_rect(bar, 1.2f * formatScale_, color, opacity * (0.65f + 0.35f * static_cast<float>(i + 1) / bars));
     }
+}
+
+void Renderer::update_audio_history(bool active) {
+    const auto now = std::chrono::steady_clock::now();
+    if (lastAudioSample_.time_since_epoch().count() != 0 &&
+        now - lastAudioSample_ < std::chrono::milliseconds(30)) return;
+
+    const bool stale = lastAudioSample_.time_since_epoch().count() == 0 ||
+                       now - lastAudioSample_ > std::chrono::milliseconds(250);
+    lastAudioSample_ = now;
+    const float level = active ? std::min(1.0f, std::sqrt(audio_peak()) * 1.2f) : 0.0f;
+    if (stale) {
+        audioHistory_.fill(level);
+    } else {
+        std::rotate(audioHistory_.begin(), audioHistory_.begin() + 1, audioHistory_.end());
+        audioHistory_.back() = level;
+    }
+}
+
+float Renderer::audio_peak() {
+    if (!audioMeter_) {
+        if (!audioDeviceEnumerator_ && FAILED(CoCreateInstance(
+                __uuidof(MMDeviceEnumerator), nullptr, CLSCTX_INPROC_SERVER,
+                IID_PPV_ARGS(audioDeviceEnumerator_.ReleaseAndGetAddressOf())))) return 0.0f;
+
+        ComPtr<IMMDevice> device;
+        if (FAILED(audioDeviceEnumerator_->GetDefaultAudioEndpoint(eRender, eMultimedia, &device))) return 0.0f;
+        if (FAILED(device->Activate(__uuidof(IAudioMeterInformation), CLSCTX_INPROC_SERVER, nullptr,
+                                    reinterpret_cast<void**>(audioMeter_.ReleaseAndGetAddressOf())))) return 0.0f;
+    }
+
+    float peak = 0.0f;
+    if (FAILED(audioMeter_->GetPeakValue(&peak))) {
+        audioMeter_.Reset();
+        return 0.0f;
+    }
+    return std::clamp(peak, 0.0f, 1.0f);
 }
 
 void Renderer::draw_media_control_icon(std::wstring_view action, D2D1_RECT_F rect,
