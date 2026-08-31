@@ -67,6 +67,7 @@ target_link_libraries(Isle PRIVATE
     windowsapp
     advapi32
     pdh
+    winhttp
 )
 
 add_custom_command(TARGET Isle POST_BUILD

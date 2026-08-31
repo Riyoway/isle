@@ -57,7 +57,7 @@ All implement `IProvider` (`start/stop/tick/invoke`) and are registered in `Over
 | Provider | Source ids | Mechanism |
 | --- | --- | --- |
 | `SystemProvider` | `system` | `GetSystemTimes`, `GlobalMemoryStatusEx`, `GetSystemPowerStatus`, PDH for GPU |
-| `AIUsageProvider` | `ai.<provider>` | tails newest `~/.codex/sessions/*.jsonl`, reads `%LOCALAPPDATA%\CodexBar\widget-snapshot.json`, and shells out to an external `codexbar.exe` on a `std::jthread` |
+| `AIUsageProvider` | `ai.<provider>` | reads Codex local sessions and refreshes selected providers directly over WinHTTP on a `std::jthread`; credentials come from provider environment variables or the Windows Credential Manager |
 | `MediaProvider` | `media` | GSMTC via C++/WinRT, event-driven |
 | `ShortcutProvider` | `shortcut.app`, `shortcut.command` | `ShellExecuteW`; re-publishes when `settings.ini` mtime changes |
 | `PluginHost` | `<plugin-id>` | out-of-process children over NDJSON stdio |
@@ -107,6 +107,12 @@ call `Settings::load()` themselves rather than receiving a reference.
 that array size; `Settings::aiColors` / `aiRings` are sized from `kAIProviders.size()` and their INI
 sections are named `ai.<id>`.
 
+`AIUsageProvider` does not depend on another application. Built-in adapters call provider endpoints
+directly (Claude, Gemini, Cursor, Copilot, OpenRouter, OpenAI, DeepSeek, z.ai, ElevenLabs, Poe,
+Venice, DeepInfra, Cline, Amp, Augment, Crof, OpenCode Go and local Ollama). Other entries accept
+`ISLE_<PROVIDER>_USAGE_URL` with `ISLE_<PROVIDER>_API_KEY`, `ISLE_<PROVIDER>_TOKEN`, or
+`ISLE_<PROVIDER>_COOKIE`. Tokens can also be stored as generic credentials under `Isle/<provider>`.
+
 ### Plugins
 
 Plugins are separate processes under `%LOCALAPPDATA%\Isle\plugins\<name>\plugin.json`, launched with
@@ -117,7 +123,7 @@ sandbox — do not describe it as one.
 
 ### Threading
 
-Main STA thread owns windowing, animation, and all D2D/D3D objects. GSMTC callbacks, the AI bridge
+Main STA thread owns windowing, animation, and all D2D/D3D objects. GSMTC callbacks, the direct AI refresh
 `jthread`, and one reader thread per plugin only touch `ActivityStore` (mutex-protected). No provider or
 plugin may hold a Direct2D/Direct3D object.
 

@@ -17,13 +17,13 @@ public:
 
 private:
     void publish();
-    void bridge_loop(std::stop_token stopToken);
+    void direct_loop(std::stop_token stopToken);
 
     ActivityStore* store_{nullptr};
     std::chrono::steady_clock::time_point lastUpdate_{};
     bool hasUsage_{false};
-    std::atomic_bool refreshBridge_{true};
-    std::jthread bridgeThread_;
+    std::atomic_bool refreshRequested_{true};
+    std::jthread refreshThread_;
 };
 
 } // namespace isle

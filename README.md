@@ -32,6 +32,7 @@ DirectComposition can bind a premultiplied-alpha composition swap chain directly
 - system tray + global `Ctrl + Alt + Space` show/hide hotkey
 - optional fullscreen auto-hide
 - startup-with-Windows setting
+- direct AI usage adapters (no external provider bridge)
 - external plugin host over NDJSON stdio
 - example usage-meter plugin that reproduces the 73 / 21 / 52 ring idea
 - x64 + ARM64 CMake presets
@@ -70,6 +71,15 @@ Install the bundled example:
 ```
 
 Restart Isle. The example publishes three usage meters. See [`plugin-sdk/protocol.md`](plugin-sdk/protocol.md) for the v1 protocol.
+
+## Direct AI provider connections
+
+Selected providers are queried directly from Isle. API keys may be supplied as
+`ISLE_<PROVIDER>_API_KEY`, tokens as `ISLE_<PROVIDER>_TOKEN`, cookies as
+`ISLE_<PROVIDER>_COOKIE`, or generic Windows credentials under `Isle/<provider>`.
+Providers without a built-in endpoint can use `ISLE_<PROVIDER>_USAGE_URL`; the
+response may contain percentage fields or a used/limit pair. Credentials stay
+outside the settings file and are never written to logs.
 
 ## Controls
 

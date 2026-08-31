@@ -55,6 +55,14 @@ Uses cheap public Win32 calls:
 
 No WMI process and no permanent performance counter session is required.
 
+### AIUsageProvider
+
+AI usage is fetched by Isle itself with WinHTTP. The provider has direct adapters
+for the common API, OAuth, cookie, and local-session sources; providers without a
+stable built-in endpoint can be configured with `ISLE_<PROVIDER>_USAGE_URL`.
+Credentials are read from provider environment variables or the Windows
+Credential Manager and are not written to the settings file.
+
 ### MediaProvider
 
 Uses Windows GSMTC (`GlobalSystemMediaTransportControlsSessionManager`) through C++/WinRT. It is event-driven and publishes a now-playing activity when the current session or playback metadata changes.

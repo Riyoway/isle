@@ -41,7 +41,6 @@ struct Settings {
     std::array<std::wstring, kAIProviders.size()> aiColors{};
     std::array<bool, kAIProviders.size()> aiRings{};
     std::array<bool, kAIProviders.size()> aiVisible{};
-    std::wstring aiBridgePath;
     std::array<ShortcutSetting, 2> appShortcuts{{
         {L"Files", L"explorer.exe", L"", L"\uE8B7", true},
         {L"Terminal", L"wt.exe", L"", L"\uE756", true},

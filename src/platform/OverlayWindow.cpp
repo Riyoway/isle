@@ -433,11 +433,6 @@ void OverlayWindow::on_left_button_up(int x, int y) {
                     settings_.compactMediaMode = (settings_.compactMediaMode + 1) % 3;
                 } else if (control == kControlAiBase + 5) {
                     settings_.compactRingCount = settings_.compactRingCount % 3 + 1;
-                } else if (control == kControlAiBase + 6) {
-                    const auto executable = Settings::data_directory().parent_path() / L"Programs" / L"CodexBar" /
-                                            L"codexbar-desktop.exe";
-                    ShellExecuteW(hwnd_, L"open", executable.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-                    return;
                 } else {
                     return;
                 }

@@ -144,10 +144,9 @@ std::size_t compact_ai_count(const RenderState& state, const std::vector<Activit
     return count;
 }
 
-// The bundled brand assets paint their mark white or with `currentColor`, the same
-// convention CodexBar's web shell tints through CSS. Swapping those two values for the
-// provider accent keeps every logo legible on the black shell, while assets carrying a
-// real multi-colour mark are left exactly as authored.
+// The bundled brand assets paint their mark white or with `currentColor`.
+// Swapping those two values for the provider accent keeps every logo legible on
+// the black shell, while assets carrying a real multi-colour mark are left as authored.
 void tint_brand_marks(std::string& markup, std::wstring_view accentHex) {
     std::string accent(1, '#');
     for (const wchar_t ch : accentHex) {
@@ -982,7 +981,7 @@ void Renderer::draw_settings(const RenderState& state, const D2D1_RECT_F& rect) 
         drawRow(2, L"Expand on hover", L"Open as soon as the pointer arrives", 12, state.expandOnHover, nullptr, false);
         drawRow(3, L"Widget Editor", L"Visibility and card order", 13, std::nullopt, nullptr, false);
         drawRow(4, L"Appearance & Position", L"Size, shape and snapping", 14, std::nullopt, nullptr, false);
-        drawRow(5, L"AI Providers", L"All CodexBar providers, icons and colors", 15, std::nullopt, nullptr, false);
+        drawRow(5, L"AI Providers", L"Direct provider usage, icons and colors", 15, std::nullopt, nullptr, false);
         drawRow(6, L"External plugins", L"Open the plugins folder", 16, std::nullopt, nullptr, false);
     } else if (state.settingsPage == 1) {
         constexpr const wchar_t* names[]{L"AI Usage", L"App Launcher", L"Commands", L"System Metrics", L"Music Player"};
@@ -1052,15 +1051,15 @@ void Renderer::draw_settings(const RenderState& state, const D2D1_RECT_F& rect) 
         const std::wstring ringCount = std::to_wstring(std::clamp(state.compactRingCount, 1, 3));
         drawRow(5, L"Usage ring count", L"Show one to three selected providers", 75, std::nullopt,
                 ringCount.c_str(), false);
-        drawRow(6, L"CodexBar providers", L"Manage provider sign-ins and accounts", 76,
-                std::nullopt, L"Open", false);
+        drawRow(6, L"Provider connection", L"Uses provider APIs, OAuth and local credentials", 76,
+                std::nullopt, L"Isle", false);
         }
     }
 
     smallFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
     draw_text(state.settingsPage == 2 ? L"Drag the island header · panels open away from screen edges" :
               state.settingsPage == 4 ? L"Selected providers appear together in the AI widget" :
-              state.settingsPage == 3 ? L"Provider authentication remains inside CodexBar" :
+              state.settingsPage == 3 ? L"Credentials stay in Isle or the provider's own account store" :
               L"Isle 0.2 · Windows 10/11", smallFormat_.Get(),
               D2D1::RectF(rect.left + pad, rect.bottom - 31.0f * s, rect.right - pad, rect.bottom - 9.0f * s),
               D2D1::ColorF(0x52525B), opacity);

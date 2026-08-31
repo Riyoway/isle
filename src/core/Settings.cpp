@@ -136,7 +136,6 @@ Settings Settings::load() {
     s.positionX = parse_float(read_ini(L"position", L"x", L"0.5", path), 0.5f);
     s.positionY = parse_float(read_ini(L"position", L"y", L"0", path), 0.0f);
     s.widgetOrder = parse_widget_order(read_ini(L"widgets", L"order", L"4,0,1,2,3", path));
-    s.aiBridgePath = read_ini(L"ai", L"codexBarPath", L"", path);
     for (std::size_t i = 0; i < kAIProviders.size(); ++i) {
         const std::wstring section = L"ai." + std::wstring(kAIProviders[i].id);
         s.aiColors[i] = read_ini(section.c_str(), L"color", s.aiColors[i].c_str(), path);
@@ -176,7 +175,6 @@ void Settings::save() const {
     write(L"widgets", L"order", std::to_wstring(widgetOrder[0]) + L"," + std::to_wstring(widgetOrder[1]) +
           L"," + std::to_wstring(widgetOrder[2]) + L"," + std::to_wstring(widgetOrder[3]) +
           L"," + std::to_wstring(widgetOrder[4]));
-    write(L"ai", L"codexBarPath", aiBridgePath);
     for (std::size_t i = 0; i < kAIProviders.size(); ++i) {
         const std::wstring section = L"ai." + std::wstring(kAIProviders[i].id);
         write(section.c_str(), L"color", aiColors[i]);
