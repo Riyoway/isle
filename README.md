@@ -114,4 +114,4 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/DESIGN.md`](docs/DESI
 
 ## License
 
-Isle is licensed under GPL-3.0. The bundled Inter variable font remains licensed under the SIL Open Font License 1.1; see [`assets/fonts/OFL.txt`](assets/fonts/OFL.txt).
+Isle is licensed under GPL-3.0. The bundled Inter variable font remains licensed under the SIL Open Font License 1.1; see [`assets/fonts/OFL.txt`](assets/fonts/OFL.txt). The provider marks in `assets/icons` are trademarks of their respective owners, bundled only to identify the service each usage meter reports on.
