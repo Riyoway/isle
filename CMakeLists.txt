@@ -19,6 +19,7 @@ add_executable(Isle WIN32
     src/platform/MonitorPlacement.cpp
     src/platform/OverlayWindow.cpp
     src/platform/Renderer.cpp
+    src/platform/ShortcutEditor.cpp
     src/platform/TrayIcon.cpp
 
     src/providers/SystemProvider.cpp
@@ -68,6 +69,7 @@ target_link_libraries(Isle PRIVATE
     advapi32
     pdh
     winhttp
+    comctl32
 )
 
 add_custom_command(TARGET Isle POST_BUILD

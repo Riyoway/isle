@@ -61,6 +61,7 @@ OverlayWindow::OverlayWindow() {
 }
 
 OverlayWindow::~OverlayWindow() {
+    shortcutEditor_.reset();
     if (hwnd_) DestroyWindow(hwnd_);
 }
 
@@ -359,9 +360,7 @@ void OverlayWindow::on_left_button_up(int x, int y) {
                 }
             } else if (settingsPage_ == 1) {
                 if (control == 35) {
-                    settings_.save();
-                    const auto path = Settings::file_path().wstring();
-                    ShellExecuteW(hwnd_, L"open", L"notepad.exe", path.c_str(), nullptr, SW_SHOWNORMAL);
+                    open_shortcut_editor();
                     return;
                 }
                 if (control < kControlWidgetBase || control >= 35) return;
@@ -762,6 +761,15 @@ void OverlayWindow::set_settings_mode(bool enabled) {
     update_monitor_position(false);
 }
 
+void OverlayWindow::open_shortcut_editor() {
+    if (!shortcutEditor_) shortcutEditor_ = std::make_unique<ShortcutEditor>();
+    shortcutEditor_->show(hwnd_, instance_, [this] {
+        settings_ = Settings::load();
+        apply_settings_to_render_state();
+        update_monitor_position(false);
+    });
+}
+
 void OverlayWindow::toggle_manual_hidden() {
     manualHidden_ = !manualHidden_;
     if (!manualHidden_) update_monitor_position(false);
@@ -862,13 +870,13 @@ int OverlayWindow::hit_test_shortcut(float x, float y) const {
             ? L"shortcut.command" : L"shortcut.app";
         int item = 0;
         for (const auto& activity : activities) {
-            if (activity.source != source || item >= 2) continue;
+            if (activity.source != source || item >= static_cast<int>(kShortcutSlots)) continue;
             const float halfWidth = cardWidth * 0.5f;
             const float centerX = card.left + halfWidth * (static_cast<float>(item) + 0.5f);
             if (point_in_rect(x, y, D2D1::RectF(centerX - halfWidth * 0.46f, card.top + 29.0f * s,
                                                 centerX + halfWidth * 0.46f, card.bottom - 3.0f * s))) {
                 return kControlShortcutBase +
-                       (widget == static_cast<int>(WidgetKind::Commands) ? 2 : 0) + item;
+                       (widget == static_cast<int>(WidgetKind::Commands) ? static_cast<int>(kShortcutSlots) : 0) + item;
             }
             ++item;
         }
@@ -877,9 +885,10 @@ int OverlayWindow::hit_test_shortcut(float x, float y) const {
 }
 
 std::wstring OverlayWindow::shortcut_activity_id(int control) const {
-    if (control < kControlShortcutBase || control >= kControlShortcutBase + 4) return {};
-    const bool commands = control >= kControlShortcutBase + 2;
-    const int wanted = commands ? control - kControlShortcutBase - 2 : control - kControlShortcutBase;
+    if (control < kControlShortcutBase || control >= kControlShortcutBase + static_cast<int>(kShortcutSlots * 2)) return {};
+    const bool commands = control >= kControlShortcutBase + static_cast<int>(kShortcutSlots);
+    const int wanted = commands ? control - kControlShortcutBase - static_cast<int>(kShortcutSlots)
+                                : control - kControlShortcutBase;
     const std::wstring_view source = commands ? L"shortcut.command" : L"shortcut.app";
     int index = 0;
     for (const auto& activity : store_.snapshot()) {

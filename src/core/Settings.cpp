@@ -85,6 +85,10 @@ void load_shortcut(ShortcutSetting& shortcut, const wchar_t* section, const std:
 } // namespace
 
 Settings::Settings() {
+    appShortcuts[0] = {L"Files", L"explorer.exe", L"", L"\uE8B7", true};
+    appShortcuts[1] = {L"Terminal", L"wt.exe", L"", L"\uE756", true};
+    commandShortcuts[0] = {L"Task Manager", L"taskmgr.exe", L"", L"\uE9D9", true};
+    commandShortcuts[1] = {L"Settings", L"ms-settings:", L"", L"\uE713", true};
     aiRings.fill(true);
     aiVisible.fill(false);
     for (const std::wstring_view id : {L"codex", L"claude", L"cursor", L"gemini"}) {
@@ -143,10 +147,12 @@ Settings Settings::load() {
         s.aiVisible[i] = parse_bool(read_ini(section.c_str(), L"visible", s.aiVisible[i] ? L"1" : L"0", path),
                                    s.aiVisible[i]);
     }
-    load_shortcut(s.appShortcuts[0], L"app.0", path);
-    load_shortcut(s.appShortcuts[1], L"app.1", path);
-    load_shortcut(s.commandShortcuts[0], L"command.0", path);
-    load_shortcut(s.commandShortcuts[1], L"command.1", path);
+    for (std::size_t i = 0; i < kShortcutSlots; ++i) {
+        const std::wstring appSection = L"app." + std::to_wstring(i);
+        const std::wstring commandSection = L"command." + std::to_wstring(i);
+        load_shortcut(s.appShortcuts[i], appSection.c_str(), path);
+        load_shortcut(s.commandShortcuts[i], commandSection.c_str(), path);
+    }
     return s;
 }
 
@@ -202,10 +208,12 @@ void Settings::save() const {
         }
         write(section, L"enabled", shortcut.enabled ? L"1" : L"0");
     };
-    writeShortcut(L"app.0", appShortcuts[0]);
-    writeShortcut(L"app.1", appShortcuts[1]);
-    writeShortcut(L"command.0", commandShortcuts[0]);
-    writeShortcut(L"command.1", commandShortcuts[1]);
+    for (std::size_t i = 0; i < kShortcutSlots; ++i) {
+        const std::wstring appSection = L"app." + std::to_wstring(i);
+        const std::wstring commandSection = L"command." + std::to_wstring(i);
+        writeShortcut(appSection.c_str(), appShortcuts[i]);
+        writeShortcut(commandSection.c_str(), commandShortcuts[i]);
+    }
 }
 
 } // namespace isle

@@ -11,6 +11,8 @@
 
 namespace isle {
 
+inline constexpr std::size_t kShortcutSlots = 4;
+
 enum class ActivityKind {
     Metric,
     Media,

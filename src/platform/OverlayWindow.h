@@ -5,6 +5,7 @@
 #include "../core/Spring.h"
 #include "../core/Provider.h"
 #include "Renderer.h"
+#include "ShortcutEditor.h"
 #include "TrayIcon.h"
 
 #include <Windows.h>
@@ -49,6 +50,7 @@ private:
     void move_widget(int row, int direction);
     void set_expanded(bool expanded);
     void set_settings_mode(bool enabled);
+    void open_shortcut_editor();
     void toggle_manual_hidden();
     bool foreground_is_fullscreen() const;
     bool hit_test_gear(float x, float y) const;
@@ -91,6 +93,7 @@ private:
     ActivityStore store_{};
     std::vector<std::unique_ptr<IProvider>> providers_;
     std::unique_ptr<TrayIcon> tray_;
+    std::unique_ptr<ShortcutEditor> shortcutEditor_;
 
     Spring widthSpring_{230.0f};
     Spring heightSpring_{40.0f};

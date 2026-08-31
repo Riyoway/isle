@@ -835,16 +835,16 @@ void Renderer::draw_shortcut_widget(const RenderState& state, const std::vector<
                           rect.right - 13.0f * s, rect.top + 29.0f * s),
               D2D1::ColorF(0xA1A1AA), opacity);
 
-    std::array<const Activity*, 2> shortcuts{};
+    std::array<const Activity*, kShortcutSlots> shortcuts{};
     std::size_t count = 0;
     for (const auto& activity : activities) {
         if (activity.source == source && count < shortcuts.size()) shortcuts[count++] = &activity;
     }
-    constexpr int controlBase = 30;
-    const int sourceOffset = commands ? 2 : 0;
-    const float halfWidth = (rect.right - rect.left) * 0.5f;
+    constexpr int controlBase = 40;
+    const int sourceOffset = commands ? static_cast<int>(kShortcutSlots) : 0;
+    const float cellWidth = (rect.right - rect.left) / static_cast<float>(shortcuts.size());
     for (std::size_t i = 0; i < count; ++i) {
-        const float centerX = rect.left + halfWidth * (static_cast<float>(i) + 0.5f);
+        const float centerX = rect.left + cellWidth * (static_cast<float>(i) + 0.5f);
         const float press = state.pressedControl == controlBase + sourceOffset + static_cast<int>(i)
                                 ? state.pressAmount : 0.0f;
         const float size = (46.0f - press * 3.0f) * s;
@@ -861,8 +861,8 @@ void Renderer::draw_shortcut_widget(const RenderState& state, const std::vector<
         draw_text(shortcuts[i]->glyph, iconFormat_.Get(), button, accent, opacity);
         smallFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
         draw_text(shortcuts[i]->title, smallFormat_.Get(),
-                  D2D1::RectF(centerX - halfWidth * 0.47f, rect.bottom - 28.0f * s,
-                              centerX + halfWidth * 0.47f, rect.bottom - 5.0f * s),
+                  D2D1::RectF(centerX - cellWidth * 0.47f, rect.bottom - 28.0f * s,
+                              centerX + cellWidth * 0.47f, rect.bottom - 5.0f * s),
                   D2D1::ColorF(0xD1D1D6), opacity);
     }
 }

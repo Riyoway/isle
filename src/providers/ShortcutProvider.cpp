@@ -11,7 +11,7 @@
 namespace isle {
 
 namespace {
-void publish_shortcuts(ActivityStore& store, const std::array<ShortcutSetting, 2>& shortcuts,
+void publish_shortcuts(ActivityStore& store, const std::array<ShortcutSetting, kShortcutSlots>& shortcuts,
                        std::wstring_view source, std::wstring_view idPrefix,
                        std::wstring_view subtitle, std::wstring_view accent, int priority) {
     for (std::size_t i = 0; i < shortcuts.size(); ++i) {
@@ -67,12 +67,24 @@ void ShortcutProvider::invoke(std::wstring_view activityId, std::wstring_view ac
     if (actionId != L"launch") return;
     const Settings settings = Settings::load();
     if (activityId.starts_with(L"shortcut.app.")) {
-        const auto index = activityId.back() == L'1' ? 1u : 0u;
+        std::size_t index = 0;
+        try {
+            index = std::stoul(std::wstring(activityId.substr(std::wstring_view(L"shortcut.app.").size())));
+        } catch (...) {
+            return;
+        }
+        if (index >= settings.appShortcuts.size()) return;
         if (!launch(settings.appShortcuts[index]) && index == 1 && settings.appShortcuts[index].target == L"wt.exe") {
             ShellExecuteW(nullptr, L"open", L"powershell.exe", nullptr, nullptr, SW_SHOWNORMAL);
         }
     } else if (activityId.starts_with(L"shortcut.command.")) {
-        const auto index = activityId.back() == L'1' ? 1u : 0u;
+        std::size_t index = 0;
+        try {
+            index = std::stoul(std::wstring(activityId.substr(std::wstring_view(L"shortcut.command.").size())));
+        } catch (...) {
+            return;
+        }
+        if (index >= settings.commandShortcuts.size()) return;
         launch(settings.commandShortcuts[index]);
     }
 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AIProviders.h"
+#include "Types.h"
 
 #include <array>
 #include <filesystem>
@@ -41,14 +42,8 @@ struct Settings {
     std::array<std::wstring, kAIProviders.size()> aiColors{};
     std::array<bool, kAIProviders.size()> aiRings{};
     std::array<bool, kAIProviders.size()> aiVisible{};
-    std::array<ShortcutSetting, 2> appShortcuts{{
-        {L"Files", L"explorer.exe", L"", L"\uE8B7", true},
-        {L"Terminal", L"wt.exe", L"", L"\uE756", true},
-    }};
-    std::array<ShortcutSetting, 2> commandShortcuts{{
-        {L"Task Manager", L"taskmgr.exe", L"", L"\uE9D9", true},
-        {L"Settings", L"ms-settings:", L"", L"\uE713", true},
-    }};
+    std::array<ShortcutSetting, kShortcutSlots> appShortcuts{};
+    std::array<ShortcutSetting, kShortcutSlots> commandShortcuts{};
 
     static std::filesystem::path data_directory();
     static std::filesystem::path file_path();
