@@ -22,7 +22,9 @@ add_executable(Isle WIN32
     src/platform/TrayIcon.cpp
 
     src/providers/SystemProvider.cpp
+    src/providers/AIUsageProvider.cpp
     src/providers/MediaProvider.cpp
+    src/providers/ShortcutProvider.cpp
     src/plugins/PluginHost.cpp
 )
 
@@ -64,6 +66,7 @@ target_link_libraries(Isle PRIVATE
     runtimeobject
     windowsapp
     advapi32
+    pdh
 )
 
 add_custom_command(TARGET Isle POST_BUILD
@@ -74,6 +77,9 @@ add_custom_command(TARGET Isle POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/OFL.txt"
             "$<TARGET_FILE_DIR:Isle>/fonts/OFL.txt"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/assets/icons"
+            "$<TARGET_FILE_DIR:Isle>/icons"
 )
 
 set_target_properties(Isle PROPERTIES
@@ -82,6 +88,7 @@ set_target_properties(Isle PROPERTIES
 
 install(TARGETS Isle RUNTIME DESTINATION .)
 install(FILES assets/fonts/InterVariable.ttf assets/fonts/OFL.txt DESTINATION fonts)
+install(DIRECTORY assets/icons/ DESTINATION icons FILES_MATCHING PATTERN "*.svg")
 
 include(CTest)
 if(BUILD_TESTING)

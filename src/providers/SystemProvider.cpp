@@ -1,17 +1,23 @@
 #include "SystemProvider.h"
 
 #include <algorithm>
+#include <cstddef>
+#include <vector>
 
 namespace isle {
 
 void SystemProvider::start(ActivityStore& store) {
     store_ = &store;
     lastUpdate_ = {};
+    initialize_gpu();
     publish();
 }
 
 void SystemProvider::stop() {
     if (store_) store_->remove_source(L"system");
+    if (gpuQuery_) PdhCloseQuery(gpuQuery_);
+    gpuQuery_ = {};
+    gpuCounter_ = {};
     store_ = nullptr;
 }
 
@@ -31,6 +37,39 @@ unsigned long long SystemProvider::filetime_to_u64(const FILETIME& ft) noexcept 
     value.LowPart = ft.dwLowDateTime;
     value.HighPart = ft.dwHighDateTime;
     return value.QuadPart;
+}
+
+void SystemProvider::initialize_gpu() {
+    if (PdhOpenQueryW(nullptr, 0, &gpuQuery_) != ERROR_SUCCESS) return;
+    if (PdhAddEnglishCounterW(gpuQuery_, L"\\GPU Engine(*)\\Utilization Percentage", 0,
+                              &gpuCounter_) != ERROR_SUCCESS) {
+        PdhCloseQuery(gpuQuery_);
+        gpuQuery_ = {};
+        return;
+    }
+    PdhCollectQueryData(gpuQuery_);
+}
+
+std::optional<double> SystemProvider::gpu_usage() {
+    if (!gpuQuery_ || !gpuCounter_ || PdhCollectQueryData(gpuQuery_) != ERROR_SUCCESS) return std::nullopt;
+    DWORD bytes = 0;
+    DWORD count = 0;
+    if (PdhGetFormattedCounterArrayW(gpuCounter_, PDH_FMT_DOUBLE, &bytes, &count, nullptr) != PDH_MORE_DATA ||
+        bytes == 0) return std::nullopt;
+
+    std::vector<std::byte> buffer(bytes);
+    auto* values = reinterpret_cast<PDH_FMT_COUNTERVALUE_ITEM_W*>(buffer.data());
+    if (PdhGetFormattedCounterArrayW(gpuCounter_, PDH_FMT_DOUBLE, &bytes, &count, values) != ERROR_SUCCESS) {
+        return std::nullopt;
+    }
+    double total = 0.0;
+    for (DWORD i = 0; i < count; ++i) {
+        const auto status = values[i].FmtValue.CStatus;
+        if (status == PDH_CSTATUS_VALID_DATA || status == PDH_CSTATUS_NEW_DATA) {
+            total += std::max(0.0, values[i].FmtValue.doubleValue);
+        }
+    }
+    return std::clamp(total, 0.0, 100.0);
 }
 
 void SystemProvider::publish() {
@@ -71,6 +110,21 @@ void SystemProvider::publish() {
     cpu.priority = 100;
     cpu.pinned = true;
     store_->upsert(std::move(cpu));
+
+    Activity gpu;
+    gpu.id = L"system.gpu";
+    gpu.source = L"system";
+    gpu.kind = ActivityKind::Metric;
+    gpu.title = L"GPU";
+    gpu.subtitle = L"Graphics";
+    gpu.glyph = L"\uE7F4";
+    gpu.accent = L"#0A84FF";
+    gpu.value = gpu_usage().value_or(0.0);
+    gpu.valueSuffix = L"%";
+    gpu.progress = *gpu.value / 100.0;
+    gpu.priority = 95;
+    gpu.pinned = true;
+    store_->upsert(std::move(gpu));
 
     // Memory load.
     MEMORYSTATUSEX memory{sizeof(memory)};

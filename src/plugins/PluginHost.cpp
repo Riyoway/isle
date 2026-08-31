@@ -45,6 +45,7 @@ std::wstring read_all_text(const std::filesystem::path& file) {
 ActivityKind parse_kind(const std::wstring& value) {
     if (value == L"metric") return ActivityKind::Metric;
     if (value == L"media") return ActivityKind::Media;
+    if (value == L"shortcut") return ActivityKind::Shortcut;
     if (value == L"timer") return ActivityKind::Timer;
     if (value == L"text") return ActivityKind::Text;
     return ActivityKind::Status;

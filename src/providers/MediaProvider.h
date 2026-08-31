@@ -4,6 +4,7 @@
 
 #include <winrt/Windows.Media.Control.h>
 
+#include <chrono>
 #include <memory>
 #include <vector>
 
@@ -33,6 +34,7 @@ private:
     winrt::event_token timelinePropertiesToken_{};
     std::shared_ptr<const std::vector<std::uint8_t>> artwork_;
     std::wstring artworkKey_;
+    std::chrono::steady_clock::time_point noSessionSince_{};
     bool started_{false};
 };
 

@@ -3,7 +3,10 @@
 #include "../core/Provider.h"
 
 #include <Windows.h>
+#include <Pdh.h>
+#include <PdhMsg.h>
 #include <chrono>
+#include <optional>
 
 namespace isle {
 
@@ -16,6 +19,8 @@ public:
 
 private:
     static unsigned long long filetime_to_u64(const FILETIME& ft) noexcept;
+    void initialize_gpu();
+    std::optional<double> gpu_usage();
     void publish();
 
     ActivityStore* store_{nullptr};
@@ -23,6 +28,8 @@ private:
     FILETIME prevKernel_{};
     FILETIME prevUser_{};
     bool hasCpuSample_{false};
+    PDH_HQUERY gpuQuery_{};
+    PDH_HCOUNTER gpuCounter_{};
     std::chrono::steady_clock::time_point lastUpdate_{};
 };
 

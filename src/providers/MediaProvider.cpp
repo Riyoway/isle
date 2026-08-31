@@ -4,6 +4,7 @@
 #include <winrt/Windows.Storage.Streams.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 
 namespace isle {
@@ -45,12 +46,41 @@ void MediaProvider::stop() {
     currentSessionToken_ = {};
     artwork_.reset();
     artworkKey_.clear();
+    noSessionSince_ = {};
     if (store_) store_->remove(L"media.now-playing");
     store_ = nullptr;
 }
 
 void MediaProvider::tick() {
-    // GSMTC is event-driven; no polling is necessary.
+    try {
+        if (!started_ || !manager_ || !store_ || noSessionSince_.time_since_epoch().count() == 0) return;
+
+        const auto now = std::chrono::steady_clock::now();
+        constexpr auto transitionGrace = std::chrono::milliseconds(250);
+        const auto current = manager_.GetCurrentSession();
+        if (current) {
+            noSessionSince_ = {};
+            refresh_async();
+            return;
+        }
+        if (now - noSessionSince_ < transitionGrace) return;
+
+        if (session_) {
+            if (mediaPropertiesToken_.value) session_.MediaPropertiesChanged(mediaPropertiesToken_);
+            if (playbackInfoToken_.value) session_.PlaybackInfoChanged(playbackInfoToken_);
+            if (timelinePropertiesToken_.value) session_.TimelinePropertiesChanged(timelinePropertiesToken_);
+            session_ = nullptr;
+            mediaPropertiesToken_ = {};
+            playbackInfoToken_ = {};
+            timelinePropertiesToken_ = {};
+            artwork_.reset();
+            artworkKey_.clear();
+        }
+        noSessionSince_ = {};
+        store_->remove(L"media.now-playing");
+    } catch (...) {
+        // GSMTC can be temporarily unavailable while the active player changes.
+    }
 }
 
 void MediaProvider::invoke(std::wstring_view activityId, std::wstring_view actionId) {
@@ -76,6 +106,14 @@ fire_and_forget MediaProvider::refresh_async() {
         if (!started_ || !manager_ || !store_) co_return;
 
         const auto newSession = manager_.GetCurrentSession();
+        if (!newSession) {
+            if (noSessionSince_.time_since_epoch().count() == 0) {
+                noSessionSince_ = std::chrono::steady_clock::now();
+            }
+            co_return;
+        }
+        noSessionSince_ = {};
+
         if (session_ != newSession) {
             if (session_) {
                 if (mediaPropertiesToken_.value) session_.MediaPropertiesChanged(mediaPropertiesToken_);
@@ -100,13 +138,14 @@ fire_and_forget MediaProvider::refresh_async() {
             co_return;
         }
 
-        const auto props = co_await session_.TryGetMediaPropertiesAsync();
-        if (!props || !started_ || !store_) co_return;
+        const auto session = session_;
+        const auto props = co_await session.TryGetMediaPropertiesAsync();
+        if (!props || !started_ || !store_ || session != session_) co_return;
 
-        const auto playback = session_.GetPlaybackInfo();
+        const auto playback = session.GetPlaybackInfo();
         const bool playing = playback && playback.PlaybackStatus() == GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing;
         const std::wstring title = props.Title().empty() ? L"Now playing" : std::wstring(props.Title().c_str());
-        const std::wstring artist = props.Artist().empty() ? std::wstring(session_.SourceAppUserModelId().c_str()) : std::wstring(props.Artist().c_str());
+        const std::wstring artist = props.Artist().empty() ? std::wstring(session.SourceAppUserModelId().c_str()) : std::wstring(props.Artist().c_str());
 
         const std::wstring artworkKey = title + L"\n" + artist;
         if (artworkKey != artworkKey_ || !artwork_) {
@@ -141,7 +180,7 @@ fire_and_forget MediaProvider::refresh_async() {
         activity.active = playing;
         activity.artwork = artwork_;
 
-        const auto timeline = session_.GetTimelineProperties();
+        const auto timeline = session.GetTimelineProperties();
         if (timeline) {
             const auto start = timeline.StartTime().count();
             const auto end = timeline.EndTime().count();
