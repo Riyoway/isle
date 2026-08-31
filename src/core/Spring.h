@@ -69,4 +69,26 @@ private:
     return overflow * (1.0f - eased((phase - pause * 2.0 - travel) / travel));
 }
 
+[[nodiscard]] inline float audio_bar_strength(float level, float minimum, float maximum) noexcept {
+    level = std::clamp(level, 0.0f, 1.0f);
+    const float contrast = std::clamp((level - minimum) / std::max(0.02f, maximum - minimum), 0.0f, 1.0f);
+    return 0.08f + 0.92f * (level * 0.15f + contrast * 0.85f);
+}
+
+[[nodiscard]] inline float snap_normalized(float value, float extent, float threshold) noexcept {
+    value = std::clamp(value, 0.0f, 1.0f);
+    for (const float target : {0.0f, 0.5f, 1.0f}) {
+        if (std::abs(value - target) * std::max(0.0f, extent) <= threshold) return target;
+    }
+    return value;
+}
+
+[[nodiscard]] inline bool prefer_upward_panel(float anchorTop, float collapsedHeight,
+                                               float panelHeight, float workTop,
+                                               float workBottom) noexcept {
+    const float below = workBottom - anchorTop;
+    const float above = anchorTop + collapsedHeight - workTop;
+    return panelHeight > below && above > below;
+}
+
 } // namespace isle

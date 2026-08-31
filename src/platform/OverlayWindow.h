@@ -44,6 +44,9 @@ private:
     void update_region();
     void update_monitor_position(bool forceResize = false);
     void update_visibility_policy();
+    void apply_settings_to_render_state();
+    void finish_window_drag();
+    void move_widget(int row, int direction);
     void set_expanded(bool expanded);
     void set_settings_mode(bool enabled);
     void toggle_manual_hidden();
@@ -51,13 +54,19 @@ private:
     bool hit_test_gear(float x, float y) const;
     int hit_test_media_action(float x, float y) const;
     int hit_test_setting_row(float x, float y) const;
+    int hit_test_setting_control(float x, float y) const;
+    int hit_test_shortcut(float x, float y) const;
+    std::wstring shortcut_activity_id(int control) const;
+    float layout_scale() const noexcept;
+    float collapsed_width_px() const noexcept;
+    float expanded_height_px() const noexcept;
     int control_at(float x, float y) const;
 
     HINSTANCE instance_{};
     HWND hwnd_{};
     UINT dpi_{96};
     UINT maxWidthPx_{520};
-    UINT maxHeightPx_{640};
+    UINT maxHeightPx_{760};
     bool trackingMouse_{false};
     bool expanded_{false};
     bool settingsMode_{false};
@@ -66,8 +75,15 @@ private:
     bool providersStarted_{false};
     bool regionEmpty_{false};
     bool pressHeld_{false};
+    bool windowDragging_{false};
+    bool positionInitialized_{false};
     int pressedControl_{-1};
+    int settingsPage_{0};
+    int aiProviderPage_{0};
+    int selectedAiProvider_{0};
     RECT lastRegion_{};
+    POINT dragStartCursor_{};
+    POINT dragStartOrigin_{};
 
     Settings settings_{};
     RenderState renderState_{};
@@ -82,9 +98,10 @@ private:
     Spring expandSpring_{0.0f};
     Spring visibilitySpring_{1.0f};
     Spring pressSpring_{0.0f};
+    Spring positionXSpring_{0.0f};
+    Spring positionYSpring_{0.0f};
 
     std::chrono::steady_clock::time_point lastFrame_{};
-    std::chrono::steady_clock::time_point hoverBegan_{};
     std::chrono::steady_clock::time_point lastClockUpdate_{};
 };
 

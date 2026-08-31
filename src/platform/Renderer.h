@@ -16,6 +16,7 @@
 #include <array>
 #include <chrono>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace isle {
@@ -30,6 +31,8 @@ public:
     void render(const RenderState& state, const std::vector<Activity>& activities);
 
     [[nodiscard]] D2D1_RECT_F island_rect(const RenderState& state) const noexcept;
+    [[nodiscard]] D2D1_RECT_F widget_rect(const RenderState& state, int widget) const noexcept;
+    [[nodiscard]] float expanded_height(const RenderState& state) const noexcept;
     [[nodiscard]] UINT width() const noexcept { return width_; }
     [[nodiscard]] UINT height() const noexcept { return height_; }
 
@@ -42,7 +45,23 @@ private:
     void draw_collapsed(const RenderState& state, const std::vector<Activity>& activities, const D2D1_RECT_F& rect);
     void draw_expanded(const RenderState& state, const std::vector<Activity>& activities, const D2D1_RECT_F& rect);
     void draw_settings(const RenderState& state, const D2D1_RECT_F& rect);
+    void draw_widget_grid(const RenderState& state, const std::vector<Activity>& activities,
+                          const D2D1_RECT_F& rect, float opacity);
+    void draw_media_widget(const RenderState& state, const Activity& media,
+                           D2D1_RECT_F rect, float opacity);
+    void draw_ai_widget(const RenderState& state, const std::vector<Activity>& activities,
+                        D2D1_RECT_F rect, float opacity);
+    void draw_system_widget(const RenderState& state, const std::vector<Activity>& activities,
+                            D2D1_RECT_F rect, float opacity);
+    void draw_shortcut_widget(const RenderState& state, const std::vector<Activity>& activities,
+                              D2D1_RECT_F rect, int widget, float opacity);
     void draw_metric(const Activity& activity, D2D1_POINT_2F center, float radius, float scale, float opacity);
+    void draw_provider_badge(const Activity& activity, D2D1_RECT_F rect, float opacity);
+    bool draw_provider_icon(std::wstring_view providerId, std::wstring_view accentHex,
+                            D2D1_RECT_F rect, float opacity);
+    ID2D1SvgDocument* provider_icon(std::wstring_view providerId, std::wstring_view accentHex);
+    void draw_collapsed_ai_rings(const RenderState& state, const std::vector<Activity>& activities,
+                                 const D2D1_RECT_F& rect, float opacity);
     void draw_artwork(const Activity& activity, D2D1_RECT_F rect, float radius, float opacity);
     void draw_waveform(D2D1_RECT_F rect, D2D1_COLOR_F color, float opacity,
                        bool active, bool audioReactive = false);
@@ -76,6 +95,8 @@ private:
     Microsoft::WRL::ComPtr<ID2D1Factory1> d2dFactory_;
     Microsoft::WRL::ComPtr<ID2D1Device> d2dDevice_;
     Microsoft::WRL::ComPtr<ID2D1DeviceContext> d2dContext_;
+    Microsoft::WRL::ComPtr<ID2D1DeviceContext5> svgContext_;
+    std::unordered_map<std::wstring, Microsoft::WRL::ComPtr<ID2D1SvgDocument>> providerIcons_;
     Microsoft::WRL::ComPtr<ID2D1Bitmap1> targetBitmap_;
     Microsoft::WRL::ComPtr<ID2D1Bitmap1> artworkBitmap_;
     Microsoft::WRL::ComPtr<ID2D1StrokeStyle> roundStrokeStyle_;

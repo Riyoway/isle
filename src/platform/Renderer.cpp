@@ -1,14 +1,18 @@
 #include "Renderer.h"
 
+#include "../core/AIProviders.h"
 #include "../core/Spring.h"
 
 #include <d2d1helper.h>
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -67,12 +71,121 @@ const Activity* media_activity(const std::vector<Activity>& activities) {
     return it == activities.end() ? nullptr : &*it;
 }
 
-const Activity* compact_activity(const std::vector<Activity>& activities) {
-    if (const auto* media = media_activity(activities)) return media;
+bool activity_visible(const RenderState& state, const Activity& activity) {
+    if (activity.source.starts_with(L"ai.")) return state.showAiUsage;
+    if (activity.source == L"system") return state.showSystemMetrics;
+    if (activity.source == L"shortcut.app") return state.showAppLauncher;
+    if (activity.source == L"shortcut.command") return state.showCommandShortcuts;
+    return true;
+}
+
+bool activity_matches_widget(const Activity& activity, int widget) {
+    switch (static_cast<WidgetKind>(widget)) {
+        case WidgetKind::AiUsage: return activity.source.starts_with(L"ai.");
+        case WidgetKind::AppLauncher: return activity.source == L"shortcut.app";
+        case WidgetKind::Commands: return activity.source == L"shortcut.command";
+        case WidgetKind::System: return activity.source == L"system";
+        case WidgetKind::Music: return activity.kind == ActivityKind::Media;
+    }
+    return false;
+}
+
+const Activity* compact_activity(const RenderState& state, const std::vector<Activity>& activities) {
+    if (state.showMusicPlayer) {
+        if (const auto* media = media_activity(activities)) return media;
+    }
+    for (const int widget : state.widgetOrder) {
+        if (!widget_enabled(state, widget)) continue;
+        const auto match = std::ranges::find_if(activities, [&](const Activity& activity) {
+            return activity_matches_widget(activity, widget);
+        });
+        if (match != activities.end()) return &*match;
+    }
     const auto live = std::ranges::find_if(activities, [](const Activity& activity) {
         return activity.kind != ActivityKind::Metric;
     });
-    return live == activities.end() ? (activities.empty() ? nullptr : &activities.front()) : &*live;
+    if (live != activities.end() && activity_visible(state, *live)) return &*live;
+    const auto visible = std::ranges::find_if(activities, [&](const Activity& activity) {
+        return activity_visible(state, activity);
+    });
+    return visible == activities.end() ? nullptr : &*visible;
+}
+
+bool full_width_widget(int widget) noexcept {
+    return widget == static_cast<int>(WidgetKind::Music) || widget == static_cast<int>(WidgetKind::AiUsage);
+}
+
+int ai_row_count(const RenderState& state) noexcept {
+    return std::clamp(state.aiVisibleCount, 1, state.showSystemMetrics ? 3 : 4);
+}
+
+float widget_height(const RenderState& state, int widget) noexcept {
+    if (widget == static_cast<int>(WidgetKind::Music)) return 220.0f;
+    if (widget == static_cast<int>(WidgetKind::AiUsage)) {
+        return 36.0f + 56.0f * static_cast<float>(ai_row_count(state));
+    }
+    return 118.0f;
+}
+
+std::wstring_view provider_id_from_source(std::wstring_view source) noexcept {
+    return source.starts_with(L"ai.") ? source.substr(3) : std::wstring_view{};
+}
+
+std::size_t compact_ai_count(const RenderState& state, const std::vector<Activity>& activities) {
+    if (state.compactMediaMode == 0) return 0;
+    std::array<std::wstring_view, 3> sources{};
+    std::size_t count = 0;
+    for (const auto& activity : activities) {
+        if (!activity.source.starts_with(L"ai.") || activity.kind != ActivityKind::Metric || !activity.compactRing) continue;
+        if (std::ranges::find(sources.begin(), sources.begin() + count, activity.source) != sources.begin() + count) continue;
+        sources[count++] = activity.source;
+        if (count == static_cast<std::size_t>(std::clamp(state.compactRingCount, 1, 3))) break;
+    }
+    return count;
+}
+
+// The bundled brand assets paint their mark white or with `currentColor`, the same
+// convention CodexBar's web shell tints through CSS. Swapping those two values for the
+// provider accent keeps every logo legible on the black shell, while assets carrying a
+// real multi-colour mark are left exactly as authored.
+void tint_brand_marks(std::string& markup, std::wstring_view accentHex) {
+    std::string accent(1, '#');
+    for (const wchar_t ch : accentHex) {
+        if (ch == L'#') continue;
+        if (ch > 0x7F || !std::isxdigit(static_cast<unsigned char>(ch))) return;
+        accent.push_back(static_cast<char>(ch));
+    }
+    if (accent.size() != 7) return;
+
+    std::string tinted;
+    tinted.reserve(markup.size());
+    for (std::size_t at = 0; at < markup.size();) {
+        if (markup[at] != '"') {
+            tinted.push_back(markup[at++]);
+            continue;
+        }
+        const std::size_t close = markup.find('"', at + 1);
+        if (close == std::string::npos) {
+            tinted.append(markup, at, std::string::npos);
+            break;
+        }
+        const std::string value = markup.substr(at + 1, close - at - 1);
+        std::string lowered = value;
+        std::ranges::transform(lowered, lowered.begin(),
+                               [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        const bool brand = lowered == "white" || lowered == "#fff" ||
+                           lowered == "#ffffff" || lowered == "currentcolor";
+        tinted.push_back('"');
+        tinted.append(brand ? accent : value);
+        tinted.push_back('"');
+        at = close + 1;
+    }
+    markup = std::move(tinted);
+}
+
+float card_radius(const RenderState& state) {
+    constexpr float radii[]{22.0f, 15.0f, 31.0f};
+    return radii[std::clamp(state.islandShape, 0, 2)] * state.dpiScale;
 }
 
 double live_progress(const Activity& activity) {
@@ -147,6 +260,11 @@ void Renderer::create_device_resources() {
     check(d2dFactory_->CreateDevice(dxgiDevice_.Get(), &d2dDevice_), "Create D2D device failed");
     check(d2dDevice_->CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE, &d2dContext_),
           "Create D2D context failed");
+
+    // Direct2D 1.3 draws the bundled provider SVGs natively. Older Windows builds fail the
+    // query and every badge falls back to its text mark.
+    providerIcons_.clear();
+    d2dContext_.As(&svgContext_);
 
     D2D1_STROKE_STYLE_PROPERTIES stroke{};
     stroke.startCap = D2D1_CAP_STYLE_ROUND;
@@ -279,8 +397,55 @@ void Renderer::ensure_text_formats(float scale) {
 
 D2D1_RECT_F Renderer::island_rect(const RenderState& state) const noexcept {
     const float left = (static_cast<float>(width_) - state.islandWidth) * 0.5f;
-    const float top = 8.0f * state.dpiScale;
+    const float top = state.expandUp
+        ? static_cast<float>(height_) - 8.0f * state.dpiScale - state.islandHeight
+        : 8.0f * state.dpiScale;
     return D2D1::RectF(left, top, left + state.islandWidth, top + state.islandHeight);
+}
+
+D2D1_RECT_F Renderer::widget_rect(const RenderState& state, int wanted) const noexcept {
+    const auto island = island_rect(state);
+    const float s = state.dpiScale;
+    const float pad = 18.0f * s;
+    const float gap = 8.0f * s;
+    const float halfWidth = (island.right - island.left - pad * 2.0f - gap) * 0.5f;
+    float y = island.top + 46.0f * s;
+    bool halfPending = false;
+    for (const int widget : state.widgetOrder) {
+        if (!widget_enabled(state, widget)) continue;
+        const float height = widget_height(state, widget) * s;
+        if (full_width_widget(widget)) {
+            if (halfPending) {
+                y += 118.0f * s + gap;
+                halfPending = false;
+            }
+            const auto result = D2D1::RectF(island.left + pad, y, island.right - pad, y + height);
+            if (widget == wanted) return result;
+            y += height + gap;
+        } else if (!halfPending) {
+            const auto result = D2D1::RectF(island.left + pad, y,
+                                            island.left + pad + halfWidth, y + height);
+            if (widget == wanted) return result;
+            halfPending = true;
+        } else {
+            const auto result = D2D1::RectF(island.left + pad + halfWidth + gap, y,
+                                            island.right - pad, y + height);
+            if (widget == wanted) return result;
+            y += 118.0f * s + gap;
+            halfPending = false;
+        }
+    }
+    return D2D1::RectF();
+}
+
+float Renderer::expanded_height(const RenderState& state) const noexcept {
+    const auto island = island_rect(state);
+    float bottom = island.top + 118.0f * state.dpiScale;
+    for (const int widget : state.widgetOrder) {
+        if (!widget_enabled(state, widget)) continue;
+        bottom = std::max(bottom, widget_rect(state, widget).bottom);
+    }
+    return bottom - island.top + 14.0f * state.dpiScale;
 }
 
 void Renderer::render(const RenderState& state, const std::vector<Activity>& activities) {
@@ -290,7 +455,9 @@ void Renderer::render(const RenderState& state, const std::vector<Activity>& act
 
     if (!state.hidden && state.visibility > 0.001f) {
         const auto rect = island_rect(state);
-        const float radius = lerp(20.0f * state.dpiScale, 42.0f * state.dpiScale, state.expandAmount);
+        constexpr float expandedRadii[]{42.0f, 30.0f, 54.0f};
+        const float expandedRadius = expandedRadii[std::clamp(state.islandShape, 0, 2)] * state.dpiScale;
+        const float radius = lerp(20.0f * state.dpiScale, expandedRadius, state.expandAmount);
         const D2D1_ROUNDED_RECT rounded{rect, radius, radius};
         draw_shadow(rounded, state.visibility);
 
@@ -337,19 +504,15 @@ void Renderer::draw_collapsed(const RenderState& state, const std::vector<Activi
         fill_round_rect(inset_rect(rect, 1.0f * s), 19.0f * s, D2D1::ColorF(0xFFFFFF),
                         0.045f * opacity * state.pressAmount);
     }
-    const Activity* primary = compact_activity(activities);
-    const float cy = (rect.top + rect.bottom) * 0.5f;
+    const Activity* primary = compact_activity(state, activities);
 
     if (!primary) {
-        ComPtr<ID2D1SolidColorBrush> dot;
-        d2dContext_->CreateSolidColorBrush(with_alpha(D2D1::ColorF(0xA1A1AA), opacity), &dot);
-        d2dContext_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(rect.left + 18.0f * s, cy), 3.5f * s, 3.5f * s), dot.Get());
-        bodyFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
-        draw_text(L"Isle", bodyFormat_.Get(), D2D1::RectF(rect.left + 30.0f * s, rect.top,
-                  rect.right - 70.0f * s, rect.bottom), D2D1::ColorF(0xF5F5F7), opacity);
-        smallFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
-        draw_text(state.timeText, smallFormat_.Get(), D2D1::RectF(rect.right - 66.0f * s, rect.top,
-                  rect.right - 14.0f * s, rect.bottom), D2D1::ColorF(0xA1A1AA), opacity);
+        const float center = (rect.left + rect.right) * 0.5f;
+        titleFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+        draw_text(L"ISLE", titleFormat_.Get(), D2D1::RectF(center - 72.0f * s, rect.top,
+                  center - 5.0f * s, rect.bottom), D2D1::ColorF(0xF5F5F7), opacity);
+        draw_text(state.timeText, titleFormat_.Get(), D2D1::RectF(center + 5.0f * s, rect.top,
+                  center + 72.0f * s, rect.bottom), D2D1::ColorF(0xD4D4D8), opacity);
         return;
     }
 
@@ -358,23 +521,45 @@ void Renderer::draw_collapsed(const RenderState& state, const std::vector<Activi
         const auto art = D2D1::RectF(rect.left + 6.0f * s, rect.top + 6.0f * s,
                                      rect.left + 34.0f * s, rect.bottom - 6.0f * s);
         draw_artwork(*primary, art, 8.0f * s, opacity);
+        const std::size_t ringCount = compact_ai_count(state, activities);
+        const bool showUsage = ringCount > 0;
+        const bool showWaveform = state.compactMediaMode != 1 || !showUsage;
+        const float usageWidth = static_cast<float>(ringCount) * 27.0f * s;
+        const float waveformWidth = showWaveform ? 46.0f * s : 0.0f;
+        const float separation = showUsage && showWaveform ? 6.0f * s : 0.0f;
+        const float titleGap = 8.0f * s;
+        const float reserved = 14.0f * s + usageWidth + waveformWidth + separation + titleGap;
         bodyFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
         draw_marquee_text(primary->title, bodyFormat_.Get(), D2D1::RectF(art.right + 9.0f * s, rect.top,
-                           rect.right - 72.0f * s, rect.bottom), D2D1::ColorF(0xF7F7F8), opacity);
-        draw_waveform(D2D1::RectF(rect.right - 60.0f * s, rect.top + 9.0f * s,
-                                  rect.right - 14.0f * s, rect.bottom - 9.0f * s),
-                      accent, opacity, primary->active);
+                           rect.right - reserved, rect.bottom), D2D1::ColorF(0xF7F7F8), opacity);
+        if (showUsage) {
+            draw_collapsed_ai_rings(state, activities, rect, opacity);
+        }
+        if (showWaveform) {
+            const float right = rect.right - 14.0f * s - usageWidth - separation;
+            draw_waveform(D2D1::RectF(right - waveformWidth, rect.top + 9.0f * s,
+                                      right, rect.bottom - 9.0f * s),
+                          accent, opacity, primary->active);
+        }
         return;
     }
 
     const auto badge = D2D1::RectF(rect.left + 7.0f * s, rect.top + 7.0f * s,
                                    rect.left + 33.0f * s, rect.bottom - 7.0f * s);
-    fill_round_rect(badge, 13.0f * s, accent, 0.20f * opacity);
-    iconFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
-    draw_text(primary->glyph, iconFormat_.Get(), badge, accent, opacity);
+    if (primary->source.starts_with(L"ai.")) draw_provider_badge(*primary, badge, opacity);
+    else {
+        fill_round_rect(badge, 13.0f * s, accent, 0.20f * opacity);
+        iconFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+        draw_text(primary->glyph, iconFormat_.Get(), badge, accent, opacity);
+    }
 
     bodyFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
-    draw_marquee_text(primary->title, bodyFormat_.Get(), D2D1::RectF(badge.right + 9.0f * s, rect.top,
+    std::wstring compactTitle = primary->title;
+    if (primary->source.starts_with(L"ai.")) {
+        const int provider = ai_provider_index(provider_id_from_source(primary->source));
+        if (provider >= 0) compactTitle = std::wstring(kAIProviders[static_cast<std::size_t>(provider)].name) + L" · " + primary->title;
+    }
+    draw_marquee_text(compactTitle, bodyFormat_.Get(), D2D1::RectF(badge.right + 9.0f * s, rect.top,
                        rect.right - 76.0f * s, rect.bottom), D2D1::ColorF(0xF7F7F8), opacity);
     metricFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
     draw_text(metric_value(*primary), metricFormat_.Get(), D2D1::RectF(rect.right - 72.0f * s, rect.top,
@@ -387,152 +572,300 @@ void Renderer::draw_expanded(const RenderState& state, const std::vector<Activit
     const float opacity = state.visibility * smoothstep(0.30f, 0.72f, state.expandAmount);
     const float pad = 18.0f * s;
     const float cx = (rect.left + rect.right) * 0.5f;
-    const Activity* media = media_activity(activities);
-
-    const D2D1_COLOR_F accent = media ? color_from_hex(media->accent) : D2D1::ColorF(0x64D2FF);
-    smallFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
-    draw_text(media ? L"NOW PLAYING" : L"ISLE", smallFormat_.Get(),
-              D2D1::RectF(rect.left + pad, rect.top + 7.0f * s,
-                          cx, rect.top + 30.0f * s),
+    bodyFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+    draw_text(L"ISLE", bodyFormat_.Get(),
+              D2D1::RectF(rect.left + pad, rect.top + 5.0f * s,
+                          cx, rect.top + 37.0f * s),
               D2D1::ColorF(0x8E8E93), opacity);
 
-    smallFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
-    draw_text(state.timeText, smallFormat_.Get(), D2D1::RectF(cx, rect.top + 7.0f * s,
-              rect.right - 76.0f * s, rect.top + 30.0f * s), D2D1::ColorF(0xD4D4D8), opacity);
+    bodyFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
+    draw_text(state.timeText, bodyFormat_.Get(), D2D1::RectF(cx, rect.top + 5.0f * s,
+              rect.right - 70.0f * s, rect.top + 37.0f * s),
+              D2D1::ColorF(0xD4D4D8), opacity);
     const float gearPress = state.pressedControl == 1 ? state.pressAmount : 0.0f;
     const auto gearBase = D2D1::RectF(rect.right - 64.0f * s, rect.top + 5.0f * s,
                                       rect.right - 32.0f * s, rect.top + 37.0f * s);
     const auto gear = inset_rect(gearBase, gearPress * 1.8f * s);
     iconFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
     draw_text(L"\uE713", iconFormat_.Get(), gear, D2D1::ColorF(0xF4F4F5), opacity);
-
-    if (media) {
-        const auto art = D2D1::RectF(rect.left + pad, rect.top + 50.0f * s,
-                                     rect.left + pad + 106.0f * s, rect.top + 156.0f * s);
-        draw_artwork(*media, art, 24.0f * s, opacity);
-
-        titleFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
-        draw_marquee_text(media->title, titleFormat_.Get(), D2D1::RectF(art.right + 16.0f * s, art.top + 9.0f * s,
-                           rect.right - pad, art.top + 40.0f * s), D2D1::ColorF(0xFAFAFA), opacity);
-        smallFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
-        draw_text(media->subtitle, smallFormat_.Get(), D2D1::RectF(art.right + 16.0f * s, art.top + 40.0f * s,
-                  rect.right - pad, art.top + 63.0f * s), D2D1::ColorF(0x8E8E93), opacity);
-        draw_waveform(D2D1::RectF(art.right + 16.0f * s, art.bottom - 29.0f * s,
-                                  rect.right - pad, art.bottom - 5.0f * s), accent, opacity,
-                      media->active, true);
-
-        const double progress = live_progress(*media);
-        const float trackTop = rect.top + 177.0f * s;
-        const auto track = D2D1::RectF(rect.left + pad, trackTop, rect.right - pad, trackTop + 4.0f * s);
-        fill_round_rect(track, 2.0f * s, D2D1::ColorF(0x27272A), opacity);
-        if (progress > 0.001) {
-            const auto elapsed = D2D1::RectF(track.left, track.top,
-                track.left + (track.right - track.left) * static_cast<float>(progress), track.bottom);
-            fill_round_rect(elapsed, 2.0f * s, D2D1::ColorF(0xF4F4F5), opacity);
-            ComPtr<ID2D1SolidColorBrush> knob;
-            d2dContext_->CreateSolidColorBrush(with_alpha(D2D1::ColorF(0xFFFFFF), opacity), &knob);
-            d2dContext_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(elapsed.right, (track.top + track.bottom) * 0.5f),
-                                                    3.4f * s, 3.4f * s), knob.Get());
-        }
-
-        if (media->durationSeconds.has_value()) {
-            const double duration = *media->durationSeconds;
-            smallFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
-            draw_text(duration_text(duration * progress), smallFormat_.Get(),
-                      D2D1::RectF(track.left, track.bottom + 5.0f * s, cx, track.bottom + 24.0f * s),
-                      D2D1::ColorF(0x71717A), opacity);
-            smallFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
-            draw_text(L"-" + duration_text(duration * (1.0 - progress)), smallFormat_.Get(),
-                      D2D1::RectF(cx, track.bottom + 5.0f * s, track.right, track.bottom + 24.0f * s),
-                      D2D1::ColorF(0x71717A), opacity);
-        }
-
-        const float controlY = rect.top + 231.0f * s;
-        const std::array<float, 3> controlX{cx - 62.0f * s, cx, cx + 62.0f * s};
-        constexpr std::wstring_view actionIds[]{L"previous", L"toggle", L"next"};
-        for (std::size_t i = 0; i < controlX.size(); ++i) {
-            const float press = state.pressedControl == static_cast<int>(2 + i) ? state.pressAmount : 0.0f;
-            const float size = (i == 1 ? 46.0f : 38.0f) * s - press * 4.0f * s;
-            const auto button = D2D1::RectF(controlX[i] - size * 0.5f, controlY - size * 0.5f,
-                                            controlX[i] + size * 0.5f, controlY + size * 0.5f);
-            if (i == 1) {
-                fill_round_rect(button, size * 0.5f, press > 0.01f ? D2D1::ColorF(0xD1D1D6) : D2D1::ColorF(0xFFFFFF), opacity);
-            } else {
-                fill_round_rect(button, size * 0.5f, press > 0.01f ? D2D1::ColorF(0x303033) : D2D1::ColorF(0x18181B), opacity);
-            }
-            draw_media_control_icon(actionIds[i], button,
-                                    i == 1 ? D2D1::ColorF(0x050505) : D2D1::ColorF(0xF4F4F5),
-                                    opacity, media->active);
-        }
-
-        std::vector<const Activity*> metrics;
-        for (const auto& activity : activities) {
-            if (activity.kind == ActivityKind::Metric && metrics.size() < 3) metrics.push_back(&activity);
-        }
-        if (!metrics.empty()) {
-            const float chipTop = rect.bottom - 50.0f * s;
-            const float gap = 7.0f * s;
-            const float chipWidth = (rect.right - rect.left - 2.0f * pad - gap * 2.0f) / 3.0f;
-            for (std::size_t i = 0; i < metrics.size(); ++i) {
-                const auto chip = D2D1::RectF(rect.left + pad + static_cast<float>(i) * (chipWidth + gap), chipTop,
-                                              rect.left + pad + static_cast<float>(i) * (chipWidth + gap) + chipWidth,
-                                              rect.bottom - 12.0f * s);
-                fill_round_rect(chip, 13.0f * s, D2D1::ColorF(0x111113), opacity);
-                draw_progress_ring(D2D1::Point2F(chip.left + 18.0f * s, (chip.top + chip.bottom) * 0.5f),
-                                   9.0f * s, 2.5f * s, metrics[i]->progress.value_or(0.0),
-                                   D2D1::ColorF(0x27272A), color_from_hex(metrics[i]->accent), opacity);
-                metricFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
-                draw_text(metric_value(*metrics[i]), metricFormat_.Get(),
-                          D2D1::RectF(chip.left + 33.0f * s, chip.top, chip.right - 7.0f * s, chip.bottom),
-                          D2D1::ColorF(0xE4E4E7), opacity);
-            }
-        }
-    } else {
-        titleFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
-        draw_text(state.timeText, titleFormat_.Get(), D2D1::RectF(rect.left + pad, rect.top + 48.0f * s,
-                  rect.left + 140.0f * s, rect.top + 78.0f * s), D2D1::ColorF(0xFAFAFA), opacity);
-        smallFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
-        draw_text(state.dateText, smallFormat_.Get(), D2D1::RectF(rect.left + 140.0f * s, rect.top + 48.0f * s,
-                  rect.right - pad, rect.top + 78.0f * s), D2D1::ColorF(0x8E8E93), opacity);
-
-        std::vector<const Activity*> metrics;
-        for (const auto& activity : activities) {
-            if (activity.kind == ActivityKind::Metric && metrics.size() < 3) metrics.push_back(&activity);
-        }
-        if (!metrics.empty()) {
-            const float usable = rect.right - rect.left - 2.0f * pad;
-            const float step = usable / static_cast<float>(metrics.size());
-            for (std::size_t i = 0; i < metrics.size(); ++i) {
-                draw_metric(*metrics[i],
-                            D2D1::Point2F(rect.left + pad + step * (static_cast<float>(i) + 0.5f), rect.top + 123.0f * s),
-                            27.0f * s, s, opacity);
-            }
-        }
-
-        float y = rect.top + 210.0f * s;
-        int rows = 0;
-        for (const auto& activity : activities) {
-            if (activity.kind == ActivityKind::Metric || rows >= 2) continue;
-            const auto row = D2D1::RectF(rect.left + pad, y, rect.right - pad, y + 44.0f * s);
-            fill_round_rect(row, 15.0f * s, D2D1::ColorF(0x111113), opacity);
-            ComPtr<ID2D1SolidColorBrush> dot;
-            d2dContext_->CreateSolidColorBrush(with_alpha(color_from_hex(activity.accent), opacity), &dot);
-            d2dContext_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(row.left + 16.0f * s, (row.top + row.bottom) * 0.5f),
-                                                    4.0f * s, 4.0f * s), dot.Get());
-            bodyFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
-            draw_text(activity.title, bodyFormat_.Get(), D2D1::RectF(row.left + 29.0f * s, row.top,
-                      row.right - 74.0f * s, row.bottom), D2D1::ColorF(0xEDEDEF), opacity);
-            metricFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
-            draw_text(metric_value(activity), metricFormat_.Get(), D2D1::RectF(row.right - 72.0f * s, row.top,
-                      row.right - 12.0f * s, row.bottom), D2D1::ColorF(0xA1A1AA), opacity);
-            y += 51.0f * s;
-            ++rows;
-        }
-    }
+    draw_widget_grid(state, activities, rect, opacity);
 
     fill_round_rect(D2D1::RectF(cx - 18.0f * s, rect.bottom - 6.0f * s,
                                 cx + 18.0f * s, rect.bottom - 3.0f * s),
                     1.5f * s, D2D1::ColorF(0x3F3F46), opacity);
+}
+
+void Renderer::draw_widget_grid(const RenderState& state, const std::vector<Activity>& activities,
+                                const D2D1_RECT_F& rect, float opacity) {
+    int count = 0;
+    const Activity* media = media_activity(activities);
+    for (const int widget : state.widgetOrder) {
+        if (!widget_enabled(state, widget)) continue;
+        const auto card = widget_rect(state, widget);
+        switch (static_cast<WidgetKind>(widget)) {
+            case WidgetKind::Music:
+                if (media) draw_media_widget(state, *media, card, opacity);
+                break;
+            case WidgetKind::AiUsage: draw_ai_widget(state, activities, card, opacity); break;
+            case WidgetKind::AppLauncher:
+            case WidgetKind::Commands: draw_shortcut_widget(state, activities, card, widget, opacity); break;
+            case WidgetKind::System: draw_system_widget(state, activities, card, opacity); break;
+        }
+        ++count;
+    }
+
+    if (count == 0) {
+        const float s = state.dpiScale;
+        iconFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+        draw_text(L"\uE713", iconFormat_.Get(),
+                  D2D1::RectF(rect.left, rect.top + 104.0f * s, rect.right, rect.top + 146.0f * s),
+                  D2D1::ColorF(0x636366), opacity);
+        bodyFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+        draw_text(L"Add widgets in Settings", bodyFormat_.Get(),
+                  D2D1::RectF(rect.left + 20.0f * s, rect.top + 146.0f * s,
+                              rect.right - 20.0f * s, rect.top + 184.0f * s),
+                  D2D1::ColorF(0x8E8E93), opacity);
+    }
+}
+
+void Renderer::draw_media_widget(const RenderState& state, const Activity& media,
+                                 D2D1_RECT_F rect, float opacity) {
+    const float s = state.dpiScale;
+    const float cx = (rect.left + rect.right) * 0.5f;
+    fill_round_rect(rect, card_radius(state), D2D1::ColorF(0x08080A), opacity);
+    stroke_round_rect(rect, card_radius(state), D2D1::ColorF(0xFFFFFF), 0.7f * s, 0.055f * opacity);
+    const auto art = D2D1::RectF(rect.left + 10.0f * s, rect.top + 10.0f * s,
+                                 rect.left + 96.0f * s, rect.top + 96.0f * s);
+    draw_artwork(media, art, 20.0f * s, opacity);
+    titleFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+    draw_marquee_text(media.title, titleFormat_.Get(),
+                      D2D1::RectF(art.right + 14.0f * s, art.top + 7.0f * s,
+                                  rect.right - 12.0f * s, art.top + 37.0f * s),
+                      D2D1::ColorF(0xFAFAFA), opacity);
+    smallFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+    draw_text(media.subtitle, smallFormat_.Get(),
+              D2D1::RectF(art.right + 14.0f * s, art.top + 38.0f * s,
+                          rect.right - 12.0f * s, art.top + 61.0f * s),
+              D2D1::ColorF(0x8E8E93), opacity);
+    draw_waveform(D2D1::RectF(art.right + 14.0f * s, art.bottom - 27.0f * s,
+                              rect.right - 12.0f * s, art.bottom - 4.0f * s),
+                  color_from_hex(media.accent), opacity, media.active, true);
+
+    const double progress = live_progress(media);
+    const auto track = D2D1::RectF(rect.left + 10.0f * s, rect.top + 111.0f * s,
+                                   rect.right - 10.0f * s, rect.top + 115.0f * s);
+    fill_round_rect(track, 2.0f * s, D2D1::ColorF(0x27272A), opacity);
+    if (progress > 0.001) {
+        const auto elapsed = D2D1::RectF(track.left, track.top,
+            track.left + (track.right - track.left) * static_cast<float>(progress), track.bottom);
+        fill_round_rect(elapsed, 2.0f * s, D2D1::ColorF(0xF4F4F5), opacity);
+        ComPtr<ID2D1SolidColorBrush> knob;
+        d2dContext_->CreateSolidColorBrush(with_alpha(D2D1::ColorF(0xFFFFFF), opacity), &knob);
+        d2dContext_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(elapsed.right, (track.top + track.bottom) * 0.5f),
+                                                3.2f * s, 3.2f * s), knob.Get());
+    }
+    if (media.durationSeconds.has_value()) {
+        const double duration = *media.durationSeconds;
+        smallFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+        draw_text(duration_text(duration * progress), smallFormat_.Get(),
+                  D2D1::RectF(track.left, track.bottom + 4.0f * s, cx, track.bottom + 22.0f * s),
+                  D2D1::ColorF(0x71717A), opacity);
+        smallFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
+        draw_text(L"-" + duration_text(duration * (1.0 - progress)), smallFormat_.Get(),
+                  D2D1::RectF(cx, track.bottom + 4.0f * s, track.right, track.bottom + 22.0f * s),
+                  D2D1::ColorF(0x71717A), opacity);
+    }
+
+    const float controlY = rect.top + 171.0f * s;
+    const std::array<float, 3> controlX{cx - 58.0f * s, cx, cx + 58.0f * s};
+    constexpr std::wstring_view actionIds[]{L"previous", L"toggle", L"next"};
+    for (std::size_t i = 0; i < controlX.size(); ++i) {
+        const float press = state.pressedControl == static_cast<int>(2 + i) ? state.pressAmount : 0.0f;
+        const float size = (i == 1 ? 44.0f : 36.0f) * s - press * 4.0f * s;
+        const auto button = D2D1::RectF(controlX[i] - size * 0.5f, controlY - size * 0.5f,
+                                        controlX[i] + size * 0.5f, controlY + size * 0.5f);
+        fill_round_rect(button, size * 0.5f,
+                        i == 1 ? (press > 0.01f ? D2D1::ColorF(0xD1D1D6) : D2D1::ColorF(0xFFFFFF))
+                               : (press > 0.01f ? D2D1::ColorF(0x303033) : D2D1::ColorF(0x18181B)),
+                        opacity);
+        draw_media_control_icon(actionIds[i], button,
+                                i == 1 ? D2D1::ColorF(0x050505) : D2D1::ColorF(0xF4F4F5),
+                                opacity, media.active);
+    }
+}
+
+void Renderer::draw_ai_widget(const RenderState& state, const std::vector<Activity>& activities,
+                              D2D1_RECT_F rect, float opacity) {
+    const float s = state.dpiScale;
+    fill_round_rect(rect, card_radius(state), D2D1::ColorF(0x111113), opacity);
+    stroke_round_rect(rect, card_radius(state), D2D1::ColorF(0xFFFFFF), 0.7f * s, 0.055f * opacity);
+    smallFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+    draw_text(L"AI USAGE", smallFormat_.Get(), D2D1::RectF(rect.left + 13.0f * s, rect.top + 6.0f * s,
+              rect.right - 13.0f * s, rect.top + 28.0f * s), D2D1::ColorF(0xA1A1AA), opacity);
+    const int visibleRows = ai_row_count(state);
+    if (state.aiVisibleCount > visibleRows) {
+        smallFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
+        const std::wstring more = L"+" + std::to_wstring(state.aiVisibleCount - visibleRows) + L" selected";
+        draw_text(more, smallFormat_.Get(), D2D1::RectF(rect.left + 150.0f * s, rect.top + 6.0f * s,
+                  rect.right - 13.0f * s, rect.top + 28.0f * s), D2D1::ColorF(0x71717A), opacity);
+    }
+
+    std::vector<std::wstring> sources;
+    for (const auto& activity : activities) {
+        if (!activity.source.starts_with(L"ai.")) continue;
+        if (std::ranges::find(sources, activity.source) == sources.end()) sources.push_back(activity.source);
+    }
+    if (sources.empty()) {
+        smallFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+        draw_text(state.aiVisibleCount == 0 ? L"Select providers in Settings" : L"Loading selected providers…",
+                   smallFormat_.Get(),
+                   D2D1::RectF(rect.left + 10.0f * s, rect.top + 44.0f * s,
+                               rect.right - 10.0f * s, rect.bottom - 12.0f * s),
+                   D2D1::ColorF(0x71717A), opacity);
+        return;
+    }
+
+    const std::wstring selectedSource = L"ai." + std::wstring(kAIProviders[static_cast<std::size_t>(
+        std::clamp(state.selectedAiProvider, 0, static_cast<int>(kAIProviders.size() - 1)))].id);
+    if (const auto selected = std::ranges::find(sources, selectedSource); selected != sources.end()) {
+        std::rotate(sources.begin(), selected, selected + 1);
+    }
+    const std::size_t providerCount = std::min<std::size_t>(static_cast<std::size_t>(visibleRows), sources.size());
+    for (std::size_t provider = 0; provider < providerCount; ++provider) {
+        std::vector<const Activity*> windows;
+        const Activity* status = nullptr;
+        for (const auto& activity : activities) {
+            if (activity.source != sources[provider]) continue;
+            if (activity.kind == ActivityKind::Metric && windows.size() < 2) windows.push_back(&activity);
+            else if (!status) status = &activity;
+        }
+        const Activity* identity = windows.empty() ? status : windows[0];
+        if (!identity) continue;
+        const float rowTop = rect.top + (30.0f + static_cast<float>(provider) * 56.0f) * s;
+        const float rowBottom = rowTop + 52.0f * s;
+        const auto badge = D2D1::RectF(rect.left + 14.0f * s, rowTop + 11.0f * s,
+                                       rect.left + 40.0f * s, rowTop + 37.0f * s);
+        draw_provider_badge(*identity, badge, opacity);
+        const int providerIndex = ai_provider_index(provider_id_from_source(sources[provider]));
+        const std::wstring name = providerIndex >= 0 ? std::wstring(kAIProviders[static_cast<std::size_t>(providerIndex)].name)
+                                                      : std::wstring(provider_id_from_source(sources[provider]));
+        bodyFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+        draw_text(name, bodyFormat_.Get(),
+                  D2D1::RectF(badge.right + 8.0f * s, rowTop + 4.0f * s,
+                              rect.left + 174.0f * s, rowTop + 27.0f * s), D2D1::ColorF(0xF4F4F5), opacity);
+        smallFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+        draw_text(windows.empty() ? identity->subtitle : windows[0]->subtitle, smallFormat_.Get(),
+                  D2D1::RectF(badge.right + 8.0f * s, rowTop + 25.0f * s,
+                              rect.left + 174.0f * s, rowTop + 46.0f * s), D2D1::ColorF(0x71717A), opacity);
+
+        const float metricsLeft = rect.left + 178.0f * s;
+        const float ringStep = (rect.right - 13.0f * s - metricsLeft) /
+                               static_cast<float>(std::max<std::size_t>(1, windows.size()));
+        for (std::size_t i = 0; i < windows.size(); ++i) {
+            const auto& activity = *windows[i];
+            const auto center = D2D1::Point2F(metricsLeft + ringStep * (static_cast<float>(i) + 0.5f),
+                                              rowTop + 23.0f * s);
+            const float radius = 14.0f * s;
+            draw_progress_ring(center, radius, 2.8f * s, activity.progress.value_or(0.0),
+                               D2D1::ColorF(0x2C2C2E), color_from_hex(activity.accent), opacity);
+            smallFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+            draw_text(metric_value(activity), smallFormat_.Get(),
+                      D2D1::RectF(center.x - radius, center.y - 9.0f * s,
+                                  center.x + radius, center.y + 9.0f * s), D2D1::ColorF(0xF5F5F7), opacity);
+            draw_text(activity.title, smallFormat_.Get(),
+                      D2D1::RectF(center.x - ringStep * 0.48f, rowTop + 37.0f * s,
+                                  center.x + ringStep * 0.48f, rowBottom), D2D1::ColorF(0x8E8E93), opacity);
+        }
+        if (provider + 1 < providerCount) {
+            ComPtr<ID2D1SolidColorBrush> divider;
+            d2dContext_->CreateSolidColorBrush(with_alpha(D2D1::ColorF(0xFFFFFF), 0.055f * opacity), &divider);
+            d2dContext_->DrawLine(D2D1::Point2F(rect.left + 13.0f * s, rowBottom),
+                                  D2D1::Point2F(rect.right - 13.0f * s, rowBottom),
+                                  divider.Get(), 0.7f * s);
+        }
+    }
+}
+
+void Renderer::draw_system_widget(const RenderState& state, const std::vector<Activity>& activities,
+                                  D2D1_RECT_F rect, float opacity) {
+    const float s = state.dpiScale;
+    fill_round_rect(rect, card_radius(state), D2D1::ColorF(0x111113), opacity);
+    stroke_round_rect(rect, card_radius(state), D2D1::ColorF(0xFFFFFF), 0.7f * s, 0.055f * opacity);
+    smallFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+    draw_text(L"SYSTEM", smallFormat_.Get(), D2D1::RectF(rect.left + 13.0f * s, rect.top + 6.0f * s,
+              rect.right - 13.0f * s, rect.top + 29.0f * s), D2D1::ColorF(0xA1A1AA), opacity);
+
+    std::array<const Activity*, 3> metrics{};
+    for (const auto& activity : activities) {
+        if (activity.id == L"system.cpu") metrics[0] = &activity;
+        else if (activity.id == L"system.gpu") metrics[1] = &activity;
+        else if (activity.id == L"system.ram") metrics[2] = &activity;
+    }
+    const float step = (rect.right - rect.left) / 3.0f;
+    constexpr std::wstring_view labels[]{L"CPU", L"GPU", L"MEM"};
+    for (std::size_t i = 0; i < metrics.size(); ++i) {
+        const auto center = D2D1::Point2F(rect.left + step * (static_cast<float>(i) + 0.5f),
+                                          rect.top + 66.0f * s);
+        const double progress = metrics[i] ? metrics[i]->progress.value_or(0.0) : 0.0;
+        const auto accent = metrics[i] ? color_from_hex(metrics[i]->accent) : D2D1::ColorF(0x636366);
+        draw_progress_ring(center, 17.0f * s, 3.0f * s, progress,
+                           D2D1::ColorF(0x2C2C2E), accent, opacity);
+        smallFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+        draw_text(metrics[i] ? metric_value(*metrics[i]) : L"--", smallFormat_.Get(),
+                  D2D1::RectF(center.x - 21.0f * s, center.y - 11.0f * s,
+                              center.x + 21.0f * s, center.y + 11.0f * s),
+                  D2D1::ColorF(0xF5F5F7), opacity);
+        draw_text(labels[i], smallFormat_.Get(),
+                  D2D1::RectF(center.x - 24.0f * s, rect.bottom - 25.0f * s,
+                              center.x + 24.0f * s, rect.bottom - 5.0f * s),
+                  D2D1::ColorF(0x8E8E93), opacity);
+    }
+}
+
+void Renderer::draw_shortcut_widget(const RenderState& state, const std::vector<Activity>& activities,
+                                    D2D1_RECT_F rect, int widget, float opacity) {
+    const float s = state.dpiScale;
+    const bool commands = widget == static_cast<int>(WidgetKind::Commands);
+    const std::wstring_view source = commands ? L"shortcut.command" : L"shortcut.app";
+    const D2D1_COLOR_F accent = commands ? D2D1::ColorF(0xFF9F0A) : D2D1::ColorF(0x0A84FF);
+    fill_round_rect(rect, card_radius(state), D2D1::ColorF(0x111113), opacity);
+    stroke_round_rect(rect, card_radius(state), D2D1::ColorF(0xFFFFFF), 0.7f * s, 0.055f * opacity);
+    smallFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+    draw_text(commands ? L"COMMANDS" : L"APPS", smallFormat_.Get(),
+              D2D1::RectF(rect.left + 13.0f * s, rect.top + 6.0f * s,
+                          rect.right - 13.0f * s, rect.top + 29.0f * s),
+              D2D1::ColorF(0xA1A1AA), opacity);
+
+    std::array<const Activity*, 2> shortcuts{};
+    std::size_t count = 0;
+    for (const auto& activity : activities) {
+        if (activity.source == source && count < shortcuts.size()) shortcuts[count++] = &activity;
+    }
+    constexpr int controlBase = 30;
+    const int sourceOffset = commands ? 2 : 0;
+    const float halfWidth = (rect.right - rect.left) * 0.5f;
+    for (std::size_t i = 0; i < count; ++i) {
+        const float centerX = rect.left + halfWidth * (static_cast<float>(i) + 0.5f);
+        const float press = state.pressedControl == controlBase + sourceOffset + static_cast<int>(i)
+                                ? state.pressAmount : 0.0f;
+        const float size = (46.0f - press * 3.0f) * s;
+        const auto button = D2D1::RectF(centerX - size * 0.5f, rect.top + 34.0f * s + press * 1.5f * s,
+                                        centerX + size * 0.5f, rect.top + 34.0f * s + press * 1.5f * s + size);
+        const float radius = state.buttonStyle == 1 ? 13.0f * s : size * 0.5f;
+        if (state.buttonStyle == 2) {
+            fill_round_rect(button, radius, accent, 0.08f * opacity);
+            stroke_round_rect(button, radius, accent, 1.3f * s, opacity);
+        } else {
+            fill_round_rect(button, radius, accent, (press > 0.01f ? 0.78f : 0.22f) * opacity);
+        }
+        iconFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+        draw_text(shortcuts[i]->glyph, iconFormat_.Get(), button, accent, opacity);
+        smallFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+        draw_text(shortcuts[i]->title, smallFormat_.Get(),
+                  D2D1::RectF(centerX - halfWidth * 0.47f, rect.bottom - 28.0f * s,
+                              centerX + halfWidth * 0.47f, rect.bottom - 5.0f * s),
+                  D2D1::ColorF(0xD1D1D6), opacity);
+    }
 }
 
 void Renderer::draw_settings(const RenderState& state, const D2D1_RECT_F& rect) {
@@ -540,11 +873,20 @@ void Renderer::draw_settings(const RenderState& state, const D2D1_RECT_F& rect) 
     const float opacity = state.visibility * smoothstep(0.30f, 0.72f, state.expandAmount);
     const float pad = 18.0f * s;
 
+    const wchar_t* title = state.settingsPage == 1 ? L"Widget Editor" :
+                           state.settingsPage == 2 ? L"Appearance" :
+                           state.settingsPage == 4 ? L"Select Providers" :
+                           state.settingsPage == 3 ? L"AI Providers" : L"Settings";
+    const wchar_t* subtitle = state.settingsPage == 1 ? L"Show, hide and arrange cards" :
+                               state.settingsPage == 2 ? L"Shape, size and monitor position" :
+                               state.settingsPage == 4 ? L"Choose several providers" :
+                               state.settingsPage == 3 ? L"Icon, color and compact usage rings" : L"Isle preferences";
+
     titleFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
-    draw_text(L"Settings", titleFormat_.Get(), D2D1::RectF(rect.left + pad, rect.top + 12.0f * s,
+    draw_text(title, titleFormat_.Get(), D2D1::RectF(rect.left + pad, rect.top + 12.0f * s,
               rect.right - 80.0f * s, rect.top + 40.0f * s), D2D1::ColorF(0xFAFAFA), opacity);
     smallFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
-    draw_text(L"Isle preferences", smallFormat_.Get(), D2D1::RectF(rect.left + pad, rect.top + 38.0f * s,
+    draw_text(subtitle, smallFormat_.Get(), D2D1::RectF(rect.left + pad, rect.top + 38.0f * s,
               rect.right - 80.0f * s, rect.top + 60.0f * s), D2D1::ColorF(0x71717A), opacity);
 
     const float closePress = state.pressedControl == 1 ? state.pressAmount : 0.0f;
@@ -552,55 +894,277 @@ void Renderer::draw_settings(const RenderState& state, const D2D1_RECT_F& rect) 
                                        rect.right - 32.0f * s, rect.top + 40.0f * s);
     const auto close = inset_rect(closeBase, closePress * 1.8f * s);
     iconFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
-    draw_text(L"\uE711", iconFormat_.Get(), close, D2D1::ColorF(0xF4F4F5), opacity);
+    draw_text(state.settingsPage == 0 ? L"\uE711" : L"\uE72B", iconFormat_.Get(), close,
+              D2D1::ColorF(0xF4F4F5), opacity);
 
-    struct SettingRow { const wchar_t* title; const wchar_t* detail; bool enabled; };
-    const SettingRow rows[] = {
-        {L"Start with Windows", L"Launch Isle after sign in", state.startWithWindows},
-        {L"Hide in fullscreen", L"Stay out of games and video", state.hideInFullscreen},
-        {L"Expand on hover", L"Open after a short hover", state.expandOnHover},
-        {L"External plugins", L"Open the plugins folder", true},
+    const auto drawToggle = [&](D2D1_RECT_F row, bool enabled) {
+        const auto toggle = D2D1::RectF(row.right - 52.0f * s, row.top + 18.0f * s,
+                                        row.right - 12.0f * s, row.top + 42.0f * s);
+        fill_round_rect(toggle, 12.0f * s,
+                        enabled ? D2D1::ColorF(0x34C759) : D2D1::ColorF(0x3A3A3C), opacity);
+        const float knobX = enabled ? toggle.right - 12.0f * s : toggle.left + 12.0f * s;
+        ComPtr<ID2D1SolidColorBrush> knob;
+        d2dContext_->CreateSolidColorBrush(with_alpha(D2D1::ColorF(0xFFFFFF), opacity), &knob);
+        d2dContext_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(knobX, (toggle.top + toggle.bottom) * 0.5f),
+                                                9.0f * s, 9.0f * s), knob.Get());
     };
 
-    float y = rect.top + 74.0f * s;
-    for (std::size_t rowIndex = 0; rowIndex < std::size(rows); ++rowIndex) {
-        const auto& rowData = rows[rowIndex];
-        const float press = state.pressedControl == static_cast<int>(10 + rowIndex) ? state.pressAmount : 0.0f;
+    const auto drawRow = [&](int rowIndex, const wchar_t* rowTitle, const wchar_t* detail,
+                             int control, std::optional<bool> toggle, const wchar_t* value,
+                             bool reorder, bool leadingIcon = false, bool checkbox = false) {
+        const float y = rect.top + (74.0f + static_cast<float>(rowIndex) * 68.0f) * s;
+        const float press = state.pressedControl == control ||
+                            (reorder && state.pressedControl >= control && state.pressedControl < control + 3)
+                                ? state.pressAmount : 0.0f;
         const auto rowBase = D2D1::RectF(rect.left + pad, y, rect.right - pad, y + 60.0f * s);
         const auto row = inset_rect(rowBase, press * 1.2f * s);
         fill_round_rect(row, 18.0f * s, press > 0.01f ? D2D1::ColorF(0x1C1C1E) : D2D1::ColorF(0x111113), opacity);
         stroke_round_rect(row, 18.0f * s, D2D1::ColorF(0xFFFFFF), 0.7f * s, 0.045f * opacity);
+        const float textLeft = row.left + (leadingIcon ? 48.0f : 15.0f) * s;
         bodyFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
-        draw_text(rowData.title, bodyFormat_.Get(), D2D1::RectF(row.left + 15.0f * s, row.top + 6.0f * s,
-                  row.right - 68.0f * s, row.top + 31.0f * s), D2D1::ColorF(0xF4F4F5), opacity);
+        draw_text(rowTitle, bodyFormat_.Get(), D2D1::RectF(textLeft, row.top + 6.0f * s,
+                  row.right - (reorder ? 108.0f : 68.0f) * s, row.top + 31.0f * s), D2D1::ColorF(0xF4F4F5), opacity);
         smallFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
-        draw_text(rowData.detail, smallFormat_.Get(), D2D1::RectF(row.left + 15.0f * s, row.top + 30.0f * s,
-                  row.right - 68.0f * s, row.bottom - 5.0f * s), D2D1::ColorF(0x71717A), opacity);
+        draw_text(detail, smallFormat_.Get(), D2D1::RectF(textLeft, row.top + 30.0f * s,
+                  row.right - (reorder ? 108.0f : 68.0f) * s, row.bottom - 5.0f * s), D2D1::ColorF(0x71717A), opacity);
 
-        if (rowIndex == 3) {
+        if (checkbox) {
+            const auto box = D2D1::RectF(row.right - 43.0f * s, row.top + 19.0f * s,
+                                         row.right - 19.0f * s, row.top + 43.0f * s);
+            fill_round_rect(box, 7.0f * s,
+                            toggle.value_or(false) ? D2D1::ColorF(0xA78BFA) : D2D1::ColorF(0x27272A), opacity);
+            if (toggle.value_or(false)) {
+                iconFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+                draw_text(L"\uE73E", iconFormat_.Get(), box, D2D1::ColorF(0xFFFFFF), opacity);
+            } else {
+                stroke_round_rect(box, 7.0f * s, D2D1::ColorF(0x636366), 0.8f * s, opacity);
+            }
+        } else if (reorder) {
+            const bool enabled = toggle.value_or(false);
+            ComPtr<ID2D1SolidColorBrush> dot;
+            d2dContext_->CreateSolidColorBrush(with_alpha(enabled ? D2D1::ColorF(0x34C759) : D2D1::ColorF(0x48484A), opacity), &dot);
+            d2dContext_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(row.right - 88.0f * s, row.top + 30.0f * s),
+                                                    5.0f * s, 5.0f * s), dot.Get());
+            iconFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+            draw_text(L"\uE70E", iconFormat_.Get(),
+                      D2D1::RectF(row.right - 70.0f * s, row.top + 12.0f * s,
+                                  row.right - 42.0f * s, row.bottom - 12.0f * s),
+                      D2D1::ColorF(0x8E8E93), opacity);
+            draw_text(L"\uE70D", iconFormat_.Get(),
+                      D2D1::RectF(row.right - 40.0f * s, row.top + 12.0f * s,
+                                  row.right - 12.0f * s, row.bottom - 12.0f * s),
+                      D2D1::ColorF(0x8E8E93), opacity);
+        } else if (toggle.has_value()) {
+            drawToggle(row, *toggle);
+        } else if (value && *value) {
+            smallFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
+            draw_text(value, smallFormat_.Get(),
+                      D2D1::RectF(row.right - 116.0f * s, row.top,
+                                  row.right - 31.0f * s, row.bottom),
+                      D2D1::ColorF(0xA78BFA), opacity);
+            iconFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+            draw_text(L"\uE76C", iconFormat_.Get(),
+                      D2D1::RectF(row.right - 31.0f * s, row.top + 12.0f * s,
+                                  row.right - 7.0f * s, row.bottom - 12.0f * s),
+                      D2D1::ColorF(0x8E8E93), opacity);
+        } else {
             iconFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
             draw_text(L"\uE76C", iconFormat_.Get(),
                       D2D1::RectF(row.right - 43.0f * s, row.top + 12.0f * s,
                                   row.right - 11.0f * s, row.bottom - 12.0f * s),
                       D2D1::ColorF(0x8E8E93), opacity);
-        } else {
-            const auto toggle = D2D1::RectF(row.right - 52.0f * s, row.top + 18.0f * s,
-                                            row.right - 12.0f * s, row.top + 42.0f * s);
-            fill_round_rect(toggle, 12.0f * s,
-                            rowData.enabled ? D2D1::ColorF(0x34C759) : D2D1::ColorF(0x3A3A3C), opacity);
-            const float knobX = rowData.enabled ? toggle.right - 12.0f * s : toggle.left + 12.0f * s;
-            ComPtr<ID2D1SolidColorBrush> knob;
-            d2dContext_->CreateSolidColorBrush(with_alpha(D2D1::ColorF(0xFFFFFF), opacity), &knob);
-            d2dContext_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(knobX, (toggle.top + toggle.bottom) * 0.5f),
-                                                    9.0f * s, 9.0f * s), knob.Get());
         }
-        y += 68.0f * s;
+    };
+
+    if (state.settingsPage == 0) {
+        drawRow(0, L"Start with Windows", L"Launch Isle after sign in", 10, state.startWithWindows, nullptr, false);
+        drawRow(1, L"Hide in fullscreen", L"Stay out of games and video", 11, state.hideInFullscreen, nullptr, false);
+        drawRow(2, L"Expand on hover", L"Open as soon as the pointer arrives", 12, state.expandOnHover, nullptr, false);
+        drawRow(3, L"Widget Editor", L"Visibility and card order", 13, std::nullopt, nullptr, false);
+        drawRow(4, L"Appearance & Position", L"Size, shape and snapping", 14, std::nullopt, nullptr, false);
+        drawRow(5, L"AI Providers", L"All CodexBar providers, icons and colors", 15, std::nullopt, nullptr, false);
+        drawRow(6, L"External plugins", L"Open the plugins folder", 16, std::nullopt, nullptr, false);
+    } else if (state.settingsPage == 1) {
+        constexpr const wchar_t* names[]{L"AI Usage", L"App Launcher", L"Commands", L"System Metrics", L"Music Player"};
+        constexpr const wchar_t* details[]{L"Provider quotas, reset windows and rings", L"Open favorite applications",
+                                            L"Run saved commands", L"CPU, GPU and memory · hidden by default",
+                                            L"Artwork, waveform and playback controls"};
+        for (int rowIndex = 0; rowIndex < 5; ++rowIndex) {
+            const int widget = state.widgetOrder[static_cast<std::size_t>(rowIndex)];
+            drawRow(rowIndex, names[widget], details[widget], 20 + rowIndex * 3,
+                    widget_enabled(state, widget), nullptr, true);
+        }
+        drawRow(5, L"Edit shortcuts", L"Open the launcher and command definitions", 35,
+                 std::nullopt, nullptr, false);
+    } else if (state.settingsPage == 2) {
+        constexpr const wchar_t* sizeNames[]{L"Compact", L"Default", L"Large"};
+        constexpr const wchar_t* shapeNames[]{L"Continuous", L"Soft", L"Pill"};
+        constexpr const wchar_t* buttonNames[]{L"Circle", L"Rounded", L"Outline"};
+        drawRow(0, L"Island size", L"Scale every surface together", 60, std::nullopt,
+                sizeNames[std::clamp(state.islandSizePreset, 0, 2)], false);
+        drawRow(1, L"Island shape", L"Corner language for panels", 61, std::nullopt,
+                shapeNames[std::clamp(state.islandShape, 0, 2)], false);
+        drawRow(2, L"Button shape", L"Launcher and command controls", 62, std::nullopt,
+                buttonNames[std::clamp(state.buttonStyle, 0, 2)], false);
+        drawRow(3, L"Reset position", L"Return to the current top center", 63, std::nullopt, L"Reset", false);
+        drawRow(4, L"Monitor at cursor", L"Move Isle to the active display", 64, state.monitorAtCursor,
+                 nullptr, false);
+    } else {
+        const int provider = std::clamp(state.selectedAiProvider, 0, static_cast<int>(kAIProviders.size() - 1));
+        const std::wstring selected = std::to_wstring(state.aiVisibleCount) + L" selected · choose several";
+        constexpr const wchar_t* compactModes[]{L"Waveform", L"Usage", L"Both"};
+        if (state.settingsPage == 4) {
+            constexpr int pageSize = 6;
+            constexpr int pageCount = (static_cast<int>(kAIProviders.size()) + pageSize - 1) / pageSize;
+            const int page = std::clamp(state.aiProviderPage, 0, pageCount - 1);
+            const int pageStart = page * pageSize;
+            for (int row = 0; row < pageSize; ++row) {
+                const int index = pageStart + row;
+                if (index >= static_cast<int>(kAIProviders.size())) break;
+                const auto& info = kAIProviders[static_cast<std::size_t>(index)];
+                const std::wstring detail = state.aiPageVisible[static_cast<std::size_t>(row)]
+                    ? L"Visible in AI widget" : L"Hidden from AI widget";
+                drawRow(row, info.name.data(), detail.c_str(), 80 + row,
+                        state.aiPageVisible[static_cast<std::size_t>(row)], nullptr, false, true, true);
+                const float y = rect.top + (74.0f + static_cast<float>(row) * 68.0f) * s;
+                const auto badge = D2D1::RectF(rect.left + pad + 13.0f * s, y + 17.0f * s,
+                                               rect.left + pad + 37.0f * s, y + 41.0f * s);
+                if (!draw_provider_icon(info.id, info.color, badge, opacity)) {
+                    fill_round_rect(badge, 7.0f * s, color_from_hex(info.color), 0.20f * opacity);
+                    bodyFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+                    draw_text(info.mark, bodyFormat_.Get(), badge, color_from_hex(info.color), opacity);
+                }
+            }
+            const std::wstring pageLabel = L"Page " + std::to_wstring(page + 1) + L" / " + std::to_wstring(pageCount);
+            drawRow(pageSize, L"More providers", L"Next provider group", 86, std::nullopt,
+                    pageLabel.c_str(), false);
+        } else {
+        drawRow(0, L"Providers", selected.c_str(), 70, std::nullopt,
+                kAIProviders[static_cast<std::size_t>(provider)].name.data(), false);
+        drawRow(1, L"Show in AI widget", L"Select several providers independently", 71,
+                state.selectedAiVisible, nullptr, false);
+        drawRow(2, L"Show compact ring", L"Include this provider in island usage", 72,
+                state.selectedAiRing, nullptr, false);
+        drawRow(3, L"Provider color", L"Cycle an Apple system accent", 73, std::nullopt,
+                state.selectedAiColor.c_str(), false);
+        drawRow(4, L"Compact content", L"Waveform, usage, or both together", 74, std::nullopt,
+                compactModes[std::clamp(state.compactMediaMode, 0, 2)], false);
+        const std::wstring ringCount = std::to_wstring(std::clamp(state.compactRingCount, 1, 3));
+        drawRow(5, L"Usage ring count", L"Show one to three selected providers", 75, std::nullopt,
+                ringCount.c_str(), false);
+        drawRow(6, L"CodexBar providers", L"Manage provider sign-ins and accounts", 76,
+                std::nullopt, L"Open", false);
+        }
     }
 
     smallFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
-    draw_text(L"Isle 0.1 · Windows 10/11", smallFormat_.Get(),
+    draw_text(state.settingsPage == 2 ? L"Drag the island header · panels open away from screen edges" :
+              state.settingsPage == 4 ? L"Selected providers appear together in the AI widget" :
+              state.settingsPage == 3 ? L"Provider authentication remains inside CodexBar" :
+              L"Isle 0.2 · Windows 10/11", smallFormat_.Get(),
               D2D1::RectF(rect.left + pad, rect.bottom - 31.0f * s, rect.right - pad, rect.bottom - 9.0f * s),
               D2D1::ColorF(0x52525B), opacity);
+}
+
+ID2D1SvgDocument* Renderer::provider_icon(std::wstring_view providerId, std::wstring_view accentHex) {
+    if (!svgContext_ || providerId.empty()) return nullptr;
+
+    // ponytail: the accent belongs in the key because the tint is baked into the markup.
+    // Only visible provider/colour pairs land here, so the map stays tiny.
+    std::wstring key(providerId);
+    key += L'|';
+    key += accentHex;
+    const auto [entry, inserted] = providerIcons_.try_emplace(key);
+    if (!inserted) return entry->second.Get();
+
+    // A null entry caches the miss, so a provider without a bundled asset is never re-read.
+    const auto path = executable_directory() / L"icons" /
+                      (L"ProviderIcon-" + std::wstring(providerId) + L".svg");
+    std::ifstream file(path, std::ios::binary);
+    if (!file) return nullptr;
+    std::string markup{std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
+    if (markup.empty() || markup.size() > 256 * 1024) return nullptr;
+    tint_brand_marks(markup, accentHex);
+
+    ComPtr<IStream> stream;
+    LARGE_INTEGER start{};
+    if (FAILED(CreateStreamOnHGlobal(nullptr, TRUE, &stream)) ||
+        FAILED(stream->Write(markup.data(), static_cast<ULONG>(markup.size()), nullptr)) ||
+        FAILED(stream->Seek(start, STREAM_SEEK_SET, nullptr))) {
+        return nullptr;
+    }
+    // Every asset carries a viewBox, so Direct2D fits its own coordinate system into this
+    // viewport and the caller only has to scale 100 units onto the badge.
+    if (FAILED(svgContext_->CreateSvgDocument(stream.Get(), D2D1::SizeF(100.0f, 100.0f),
+                                              &entry->second))) {
+        entry->second.Reset();
+    }
+    return entry->second.Get();
+}
+
+bool Renderer::draw_provider_icon(std::wstring_view providerId, std::wstring_view accentHex,
+                                  D2D1_RECT_F rect, float opacity) {
+    ID2D1SvgDocument* document = provider_icon(providerId, accentHex);
+    if (!document) return false;
+    const float side = std::min(rect.right - rect.left, rect.bottom - rect.top);
+    if (side <= 0.0f || opacity <= 0.001f) return true;
+
+    D2D1::Matrix3x2F saved;
+    d2dContext_->GetTransform(&saved);
+    const float scale = side / 100.0f;
+    d2dContext_->SetTransform(D2D1::Matrix3x2F::Scale(scale, scale) *
+                              D2D1::Matrix3x2F::Translation((rect.left + rect.right - side) * 0.5f,
+                                                            (rect.top + rect.bottom - side) * 0.5f) *
+                              saved);
+    // DrawSvgDocument takes no opacity, so the expand/collapse fade needs a layer.
+    const bool fading = opacity < 0.999f;
+    if (fading) {
+        d2dContext_->PushLayer(D2D1::LayerParameters1(D2D1::InfiniteRect(), nullptr,
+                                                      D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+                                                      D2D1::IdentityMatrix(), opacity),
+                               nullptr);
+    }
+    svgContext_->DrawSvgDocument(document);
+    if (fading) d2dContext_->PopLayer();
+    d2dContext_->SetTransform(saved);
+    return true;
+}
+
+void Renderer::draw_provider_badge(const Activity& activity, D2D1_RECT_F rect, float opacity) {
+    if (draw_provider_icon(provider_id_from_source(activity.source), activity.accent, rect, opacity)) {
+        return;
+    }
+    // No bundled asset for this provider: fall back to the short mark from the provider table.
+    IDWriteTextFormat* format = activity.glyph.size() > 1 ? bodyFormat_.Get() : titleFormat_.Get();
+    format->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+    draw_text(activity.glyph, format, rect, color_from_hex(activity.accent), opacity);
+}
+
+void Renderer::draw_collapsed_ai_rings(const RenderState& state, const std::vector<Activity>& activities,
+                                        const D2D1_RECT_F& rect, float opacity) {
+    if (state.compactMediaMode == 0) return;
+    const float s = state.dpiScale;
+    std::array<const Activity*, 3> selected{};
+    std::size_t count = 0;
+    for (const auto& activity : activities) {
+        if (!activity.source.starts_with(L"ai.") || activity.kind != ActivityKind::Metric || !activity.compactRing) continue;
+        bool duplicate = false;
+        for (std::size_t i = 0; i < count; ++i) duplicate = duplicate || selected[i]->source == activity.source;
+        if (!duplicate) selected[count++] = &activity;
+        if (count == static_cast<std::size_t>(std::clamp(state.compactRingCount, 1, 3))) break;
+    }
+    for (std::size_t i = 0; i < count; ++i) {
+        const float centerX = rect.right - (16.0f + static_cast<float>(i) * 27.0f) * s;
+        const auto center = D2D1::Point2F(centerX, (rect.top + rect.bottom) * 0.5f);
+        draw_progress_ring(center, 10.0f * s, 2.4f * s, selected[i]->progress.value_or(0.0),
+                           D2D1::ColorF(0x27272A), color_from_hex(selected[i]->accent), opacity);
+        const auto mark = D2D1::RectF(center.x - 8.0f * s, center.y - 8.0f * s,
+                                      center.x + 8.0f * s, center.y + 8.0f * s);
+        if (draw_provider_icon(provider_id_from_source(selected[i]->source),
+                               selected[i]->accent, mark, opacity)) continue;
+        smallFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+        draw_text(selected[i]->glyph, smallFormat_.Get(), mark, D2D1::ColorF(0xF5F5F7), opacity);
+    }
 }
 
 void Renderer::draw_metric(const Activity& activity, D2D1_POINT_2F center, float radius, float scale, float opacity) {
@@ -695,11 +1259,12 @@ void Renderer::draw_waveform(D2D1_RECT_F rect, D2D1_COLOR_F color, float opacity
     const float gap = width / static_cast<float>(bars);
     const double phase = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count() * 5.4;
     if (audioReactive) update_audio_history(active);
+    const auto [audioMin, audioMax] = std::minmax_element(audioHistory_.begin(), audioHistory_.end());
     for (int i = 0; i < bars; ++i) {
         const std::size_t historyIndex = static_cast<std::size_t>(i) * (audioHistory_.size() - 1) /
                                          static_cast<std::size_t>(std::max(1, bars - 1));
         const float strength = audioReactive
-            ? 0.10f + 0.90f * audioHistory_[historyIndex]
+            ? audio_bar_strength(audioHistory_[historyIndex], *audioMin, *audioMax)
             : active
                 ? 0.22f + 0.78f * static_cast<float>(std::abs(std::sin(phase + static_cast<double>(i) * 0.86)))
                 : 0.24f + 0.13f * static_cast<float>((i * 7) % 5);
@@ -719,7 +1284,7 @@ void Renderer::update_audio_history(bool active) {
     const bool stale = lastAudioSample_.time_since_epoch().count() == 0 ||
                        now - lastAudioSample_ > std::chrono::milliseconds(250);
     lastAudioSample_ = now;
-    const float level = active ? std::min(1.0f, std::sqrt(audio_peak()) * 1.2f) : 0.0f;
+    const float level = active ? std::min(1.0f, std::pow(audio_peak(), 1.35f) * 1.8f) : 0.0f;
     if (stale) {
         audioHistory_.fill(level);
     } else {
