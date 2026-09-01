@@ -488,6 +488,18 @@ std::wstring reset_description(const JsonObject& object) {
     return {};
 }
 
+std::wstring format_claude_reset(std::wstring description) {
+    if (description.size() >= 16 && description[4] == L'-' && description[7] == L'-' &&
+        description[10] == L'T' && description[13] == L':') {
+        return L"Resets at " + description.substr(11, 5);
+    }
+    return description;
+}
+
+std::wstring claude_reset_description(const JsonObject& object) {
+    return format_claude_reset(reset_description(object));
+}
+
 std::optional<double> explicit_percent(const JsonObject& object) {
     struct Candidate {
         int rank;
@@ -593,9 +605,38 @@ std::vector<DirectWindow> extract_windows(const IJsonValue& root) {
     return unique;
 }
 
-std::vector<DirectWindow> extract_claude_windows(const IJsonValue& root) {
-    if (root.ValueType() != JsonValueType::Object) return extract_windows(root);
+void find_claude_field(const IJsonValue& value, std::wstring_view wanted,
+                       std::optional<DirectWindow>& output, int depth = 0) {
+    if (output || depth > 8) return;
+    try {
+        if (value.ValueType() == JsonValueType::Object) {
+            const auto object = value.GetObject();
+            for (const auto& property : object) {
+                if (lowercase_ascii(property.Key().c_str()) != wanted) continue;
+                if (property.Value().ValueType() != JsonValueType::Object) continue;
+                const auto usage = property.Value().GetObject();
+                const double percent = explicit_percent(usage).value_or(ratio_percent(usage).value_or(-1.0));
+                if (percent < 0.0) continue;
+                output = DirectWindow{{}, claude_reset_description(usage), percent};
+                return;
+            }
+            for (const auto& property : object) {
+                if (property.Value().ValueType() != JsonValueType::Object &&
+                    property.Value().ValueType() != JsonValueType::Array) continue;
+                find_claude_field(property.Value(), wanted, output, depth + 1);
+                if (output) return;
+            }
+        } else if (value.ValueType() == JsonValueType::Array) {
+            for (const auto& item : value.GetArray()) {
+                find_claude_field(item, wanted, output, depth + 1);
+                if (output) return;
+            }
+        }
+    } catch (...) {
+    }
+}
 
+std::vector<DirectWindow> extract_claude_windows(const IJsonValue& root) {
     constexpr std::array<std::pair<std::wstring_view, std::wstring_view>, 6> fields{{
         {L"five_hour", L"5 hours"},
         {L"seven_day", L"1 week"},
@@ -606,22 +647,23 @@ std::vector<DirectWindow> extract_claude_windows(const IJsonValue& root) {
     }};
 
     std::vector<DirectWindow> windows;
-    try {
-        const auto object = root.GetObject();
-        for (const auto& [key, title] : fields) {
-            if (!object.HasKey(key.data())) continue;
-            const auto value = object.GetNamedValue(key.data());
-            if (value.ValueType() != JsonValueType::Object) continue;
-            const auto usage = value.GetObject();
-            const double percent = explicit_percent(usage).value_or(ratio_percent(usage).value_or(-1.0));
-            if (percent < 0.0) continue;
-            windows.push_back({std::wstring(title), reset_description(usage), percent});
-            if (windows.size() == 4) break;
-        }
-    } catch (...) {
-        return {};
+    for (const auto& [key, title] : fields) {
+        std::optional<DirectWindow> window;
+        find_claude_field(root, key, window);
+        if (!window) continue;
+        window->title = title;
+        windows.push_back(std::move(*window));
+        if (windows.size() == 4) break;
     }
-    return windows.empty() ? extract_windows(root) : windows;
+    if (!windows.empty()) return windows;
+
+    // Claude's web endpoint can return the same windows as an unnamed array.
+    // Keep the stable 5-hour/1-week labels instead of exposing array indices.
+    windows = extract_windows(root);
+    if (windows.size() > 0 && windows[0].title == L"0") windows[0].title = L"5 hours";
+    if (windows.size() > 1 && windows[1].title == L"1") windows[1].title = L"1 week";
+    for (auto& window : windows) window.subtitle = format_claude_reset(std::move(window.subtitle));
+    return windows;
 }
 
 std::wstring first_string_for_key(const IJsonValue& value, std::wstring_view wanted, int depth = 0) {
