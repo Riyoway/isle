@@ -1,4 +1,5 @@
 #include "ShortcutEditor.h"
+#include "../core/ShortcutCatalog.h"
 
 #include <commctrl.h>
 #include <dwmapi.h>
@@ -659,7 +660,7 @@ void ShortcutEditor::load_app_batch() {
     if (!appLoading_) return;
     const std::filesystem::recursive_directory_iterator end;
     int processed = 0;
-    while (processed < kAppLoadBatchSize && appSeen_.size() < kMaxApps) {
+    while (processed < kAppLoadBatchSize && nextAppCache_.size() < kMaxApps) {
         if (!appIterator_) {
             while (appRootIndex_ < appRoots_.size()) {
                 std::error_code ec;
@@ -698,7 +699,7 @@ void ShortcutEditor::load_app_batch() {
         if (regular) append_app(path);
     }
 
-    if (appSeen_.size() >= kMaxApps) {
+    if (nextAppCache_.size() >= kMaxApps) {
         finish_app_discovery();
         return;
     }
@@ -738,6 +739,8 @@ bool ShortcutEditor::append_app(const std::filesystem::path& path) {
     if (extension != L".lnk" && extension != L".url" && extension != L".exe") return false;
 
     const std::wstring appPath = path.wstring();
+    const std::wstring label = path.stem().wstring();
+    if (shortcut_is_auxiliary(label, appPath)) return false;
     const std::wstring key = lower(appPath);
     if (std::ranges::find(appSeen_, key) != appSeen_.end()) return false;
     appSeen_.push_back(key);
@@ -754,7 +757,8 @@ bool ShortcutEditor::append_app(const std::filesystem::path& path) {
         app.path = appPath;
     } else {
         app.path = appPath;
-        app.label = path.stem().wstring();
+        app.label = label;
+        app.identity = shortcut_group_key(label);
         SHFILEINFOW info{};
         if (SHGetFileInfoW(app.path.c_str(), FILE_ATTRIBUTE_NORMAL, &info, sizeof(info),
                            SHGFI_ICON | SHGFI_SMALLICON)) {
@@ -763,12 +767,19 @@ bool ShortcutEditor::append_app(const std::filesystem::path& path) {
         }
     }
     if (app.label.empty()) return false;
-    nextAppCache_.push_back({app, modified});
-    const auto existing = std::ranges::find_if(apps_, [&](const InstalledApp& item) {
-        return same_path(item.path, app.path);
+    if (app.identity.empty()) app.identity = shortcut_group_key(app.label);
+    const auto duplicate = std::ranges::find_if(nextAppCache_, [&](const CachedApp& entry) {
+        return entry.app.identity == app.identity;
     });
-    if (existing != apps_.end()) {
-        *existing = std::move(app);
+    if (duplicate != nextAppCache_.end() && duplicate->app.label.size() <= app.label.size()) return true;
+    if (duplicate != nextAppCache_.end()) *duplicate = {app, modified};
+    else nextAppCache_.push_back({app, modified});
+
+    const auto visible = std::ranges::find_if(apps_, [&](const InstalledApp& item) {
+        return item.identity == app.identity;
+    });
+    if (visible != apps_.end()) {
+        *visible = std::move(app);
     } else {
         apps_.push_back(std::move(app));
     }

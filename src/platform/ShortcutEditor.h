@@ -20,6 +20,7 @@ public:
     struct InstalledApp {
         std::wstring label;
         std::wstring path;
+        std::wstring identity;
         int imageIndex{-1};
     };
 

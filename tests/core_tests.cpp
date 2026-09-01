@@ -1,6 +1,7 @@
 #include "../src/core/ActivityStore.h"
 #include "../src/core/AIProviders.h"
 #include "../src/core/Spring.h"
+#include "../src/core/ShortcutCatalog.h"
 
 #include <cassert>
 #include <cmath>
@@ -53,6 +54,16 @@ int main() {
     {
         static_assert(isle::kAIProviders.size() == 56);
         assert((isle::kAIProviders.size() + 6 - 1) / 6 == 10);
+    }
+
+    {
+        assert(isle::shortcut_is_auxiliary(L"7-Zip Help", LR"(C:\ProgramData\Programs\7-Zip\7-Zip Help.lnk)"));
+        assert(isle::shortcut_is_auxiliary(L"Changelog", LR"(C:\ProgramData\Programs\HxD\Changelog.lnk)"));
+        assert(isle::shortcut_is_auxiliary(L"Event Viewer", LR"(C:\ProgramData\Programs\Administrative Tools\Event Viewer.lnk)"));
+        assert(!isle::shortcut_is_auxiliary(L"HiBit Uninstaller", LR"(C:\ProgramData\Programs\HiBit Uninstaller.lnk)"));
+        assert(!isle::shortcut_is_auxiliary(L"Cheat Engine", LR"(C:\ProgramData\Programs\Cheat Engine.lnk)"));
+        assert(isle::shortcut_group_key(L"Cheat Engine") == isle::shortcut_group_key(L"Cheat Engine (32-bit)"));
+        assert(isle::shortcut_group_key(L"Cheat Engine") == isle::shortcut_group_key(L"Cheat Engine (64-bit SSE4-AVX2)"));
     }
 
     {
