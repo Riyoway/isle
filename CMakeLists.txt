@@ -70,6 +70,7 @@ target_link_libraries(Isle PRIVATE
     pdh
     winhttp
     comctl32
+    uxtheme
 )
 
 add_custom_command(TARGET Isle POST_BUILD

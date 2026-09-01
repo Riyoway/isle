@@ -79,9 +79,9 @@ bool OverlayWindow::create(HINSTANCE instance, int showCommand) {
     wc.lpszClassName = kWindowClass;
     if (!RegisterClassExW(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return false;
 
-    // Native shortcut controls need the window's redirection surface to paint above DComp.
-    const DWORD exStyle = WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
-    const DWORD style = WS_POPUP | WS_CLIPCHILDREN;
+    const DWORD exStyle = WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE |
+                          WS_EX_NOREDIRECTIONBITMAP;
+    const DWORD style = WS_POPUP;
 
     hwnd_ = CreateWindowExW(exStyle, kWindowClass, L"Isle", style,
                             0, 0, static_cast<int>(maxWidthPx_), static_cast<int>(maxHeightPx_),

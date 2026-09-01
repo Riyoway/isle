@@ -333,8 +333,7 @@ void Renderer::create_device_resources() {
 
     check(DCompositionCreateDevice(dxgiDevice_.Get(), IID_PPV_ARGS(&dcompDevice_)),
           "DCompositionCreateDevice failed");
-    // Keep the D2D surface below embedded Win32 editor controls.
-    check(dcompDevice_->CreateTargetForHwnd(hwnd_, FALSE, &dcompTarget_),
+    check(dcompDevice_->CreateTargetForHwnd(hwnd_, TRUE, &dcompTarget_),
           "CreateTargetForHwnd failed");
     check(dcompDevice_->CreateVisual(&dcompVisual_), "CreateVisual failed");
     check(dcompTarget_->SetRoot(dcompVisual_.Get()), "SetRoot failed");
