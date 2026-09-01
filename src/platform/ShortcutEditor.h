@@ -5,6 +5,7 @@
 #include <Windows.h>
 #include <commctrl.h>
 
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <string_view>
@@ -18,6 +19,11 @@ public:
         std::wstring label;
         std::wstring path;
         int imageIndex{-1};
+    };
+
+    struct CachedApp {
+        InstalledApp app;
+        std::int64_t modified{};
     };
 
     ~ShortcutEditor();
@@ -78,6 +84,8 @@ private:
     HWND removeCommandButton_{};
 
     std::vector<InstalledApp> apps_;
+    std::vector<CachedApp> appCache_;
+    bool appImageCacheValid_{false};
     bool commandsPage_{false};
     bool refreshing_{false};
     RECT embeddedBounds_{};

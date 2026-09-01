@@ -88,6 +88,7 @@ void ShortcutEditor::show_embedded(HWND parent, HINSTANCE instance, RECT bounds,
     changed_ = std::move(changed);
     if (hwnd_) {
         settings_ = Settings::load();
+        apps_ = discover_apps();
         resize_embedded(bounds, radius);
         switch_page(commandsPage_);
         ShowWindow(hwnd_, SW_SHOW);
@@ -306,6 +307,7 @@ void ShortcutEditor::create_controls() {
 
     appImages_ = ImageList_Create(32, 32, ILC_COLOR32 | ILC_MASK, 64, 32);
     ListView_SetImageList(appList_, appImages_, LVSIL_SMALL);
+    appImageCacheValid_ = appImages_ != nullptr;
 }
 
 void ShortcutEditor::layout_controls() {
@@ -537,6 +539,7 @@ void ShortcutEditor::destroy_resources() {
         DeleteObject(fieldBrush_);
         fieldBrush_ = nullptr;
     }
+    appImageCacheValid_ = false;
     appsTab_ = commandsTab_ = search_ = appList_ = appHint_ = addAppButton_ = nullptr;
     commandLabelCaption_ = commandLabel_ = commandTargetCaption_ = commandTarget_ = nullptr;
     commandArgumentsCaption_ = commandArguments_ = browseButton_ = addCommandButton_ = nullptr;
@@ -546,6 +549,12 @@ void ShortcutEditor::destroy_resources() {
 }
 
 std::vector<ShortcutEditor::InstalledApp> ShortcutEditor::discover_apps() {
+    const auto file_stamp = [](const std::filesystem::path& path) -> std::int64_t {
+        std::error_code ec;
+        const auto value = std::filesystem::last_write_time(path, ec);
+        return ec ? 0 : static_cast<std::int64_t>(value.time_since_epoch().count());
+    };
+
     std::vector<std::filesystem::path> roots;
     for (const KNOWNFOLDERID folder : {FOLDERID_Programs, FOLDERID_CommonPrograms}) {
         PWSTR raw = nullptr;
@@ -556,6 +565,7 @@ std::vector<ShortcutEditor::InstalledApp> ShortcutEditor::discover_apps() {
     }
 
     std::vector<InstalledApp> result;
+    std::vector<CachedApp> nextCache;
     std::vector<std::wstring> seen;
     for (const auto& root : roots) {
         std::error_code ec;
@@ -579,20 +589,37 @@ std::vector<ShortcutEditor::InstalledApp> ShortcutEditor::discover_apps() {
             if (std::ranges::find(seen, key) != seen.end()) continue;
             seen.push_back(key);
 
+            const std::wstring appPath = path.wstring();
+            const std::int64_t modified = file_stamp(path);
+            // ponytail: linear lookup is bounded by the 500-item picker; use a map if that cap grows.
+            const auto cached = std::ranges::find_if(appCache_, [&](const CachedApp& entry) {
+                return entry.modified == modified && same_path(entry.app.path, appPath);
+            });
+
             InstalledApp app;
-            app.path = path.wstring();
-            app.label = path.stem().wstring();
-            SHFILEINFOW info{};
-            if (SHGetFileInfoW(app.path.c_str(), FILE_ATTRIBUTE_NORMAL, &info, sizeof(info),
-                               SHGFI_ICON | SHGFI_SMALLICON)) {
-                if (appImages_) {
-                    app.imageIndex = ImageList_AddIcon(appImages_, info.hIcon);
+            if (cached != appCache_.end() && appImageCacheValid_) {
+                app = cached->app;
+                app.path = appPath;
+            } else {
+                app.path = appPath;
+                app.label = path.stem().wstring();
+                SHFILEINFOW info{};
+                if (SHGetFileInfoW(app.path.c_str(), FILE_ATTRIBUTE_NORMAL, &info, sizeof(info),
+                                   SHGFI_ICON | SHGFI_SMALLICON)) {
+                    if (appImages_) {
+                        app.imageIndex = ImageList_AddIcon(appImages_, info.hIcon);
+                    }
+                    DestroyIcon(info.hIcon);
                 }
-                DestroyIcon(info.hIcon);
             }
-            if (!app.label.empty()) result.push_back(std::move(app));
+            if (!app.label.empty()) {
+                nextCache.push_back({app, modified});
+                result.push_back(std::move(app));
+            }
         }
     }
+    appCache_ = std::move(nextCache);
+    appImageCacheValid_ = appImages_ != nullptr;
     std::ranges::sort(result, [](const InstalledApp& left, const InstalledApp& right) {
         return _wcsicmp(left.label.c_str(), right.label.c_str()) < 0;
     });
