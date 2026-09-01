@@ -933,10 +933,7 @@ void ShortcutEditor::update_app_check(int item, bool checked) {
         const auto free = std::ranges::find_if(settings_.appShortcuts, [](const ShortcutSetting& shortcut) {
             return !shortcut.enabled || shortcut.target.empty();
         });
-        if (free == settings_.appShortcuts.end()) {
-            MessageBoxW(hwnd_, L"The Apps widget can contain up to four apps.", L"Apps", MB_OK | MB_ICONINFORMATION);
-            return;
-        }
+        if (free == settings_.appShortcuts.end()) return;
         *free = {app.label, app.path, L"", L"\uE8A7", true};
     } else {
         for (auto& shortcut : settings_.appShortcuts) {
