@@ -240,6 +240,7 @@ void OverlayWindow::on_timer() {
         update_monitor_position(false);
     }
     update_animation(dt);
+    update_shortcut_editor_bounds();
     update_region();
     renderer_.render(renderState_, activities);
 }
@@ -324,7 +325,11 @@ void OverlayWindow::on_left_button_up(int x, int y) {
 
     if (expanded_) {
         if (hit_test_gear(static_cast<float>(x), static_cast<float>(y))) {
-            if (settingsMode_ && settingsPage_ == 4) {
+            if (settingsMode_ && settingsPage_ == 5) {
+                if (shortcutEditor_) shortcutEditor_->hide();
+                settingsPage_ = 0;
+                renderState_.settingsPage = 0;
+            } else if (settingsMode_ && settingsPage_ == 4) {
                 settingsPage_ = 3;
                 renderState_.settingsPage = settingsPage_;
             } else if (settingsMode_ && settingsPage_ != 0) {
@@ -739,6 +744,7 @@ void OverlayWindow::update_visibility_policy() {
 void OverlayWindow::set_expanded(bool expanded) {
     expanded_ = expanded;
     if (!expanded_) {
+        if (shortcutEditor_) shortcutEditor_->hide();
         settingsMode_ = false;
         settingsPage_ = 0;
         renderState_.settingsPage = 0;
@@ -754,6 +760,7 @@ void OverlayWindow::set_expanded(bool expanded) {
 void OverlayWindow::set_settings_mode(bool enabled) {
     settingsMode_ = enabled;
     if (enabled) settingsPage_ = 0;
+    if (!enabled && shortcutEditor_) shortcutEditor_->hide();
     if (enabled && !expanded_) set_expanded(true);
     if (expanded_) heightSpring_.set_target(expanded_height_px());
     renderState_.settingsMode = enabled;
@@ -763,11 +770,36 @@ void OverlayWindow::set_settings_mode(bool enabled) {
 
 void OverlayWindow::open_shortcut_editor() {
     if (!shortcutEditor_) shortcutEditor_ = std::make_unique<ShortcutEditor>();
-    shortcutEditor_->show(hwnd_, instance_, [this] {
+    settingsPage_ = 5;
+    renderState_.settingsPage = settingsPage_;
+    apply_settings_to_render_state();
+    set_expanded(true);
+    update_shortcut_editor_bounds();
+    const auto island = renderer_.island_rect(renderState_);
+    const float s = renderState_.dpiScale;
+    const RECT bounds{
+        static_cast<LONG>(std::lround(island.left)),
+        static_cast<LONG>(std::lround(island.top + 64.0f * s)),
+        static_cast<LONG>(std::lround(island.right)),
+        static_cast<LONG>(std::lround(island.bottom))};
+    shortcutEditor_->show_embedded(hwnd_, instance_, bounds, static_cast<int>(24.0f * s), [this] {
         settings_ = Settings::load();
         apply_settings_to_render_state();
         update_monitor_position(false);
+        update_shortcut_editor_bounds();
     });
+}
+
+void OverlayWindow::update_shortcut_editor_bounds() {
+    if (!shortcutEditor_ || !settingsMode_ || settingsPage_ != 5 || !expanded_) return;
+    const auto island = renderer_.island_rect(renderState_);
+    const float s = renderState_.dpiScale;
+    const RECT bounds{
+        static_cast<LONG>(std::lround(island.left)),
+        static_cast<LONG>(std::lround(island.top + 64.0f * s)),
+        static_cast<LONG>(std::lround(island.right)),
+        static_cast<LONG>(std::lround(island.bottom))};
+    shortcutEditor_->resize_embedded(bounds, static_cast<int>(24.0f * s));
 }
 
 void OverlayWindow::toggle_manual_hidden() {
@@ -832,7 +864,8 @@ int OverlayWindow::hit_test_setting_row(float x, float y) const {
     const float right = rect.right - 22.0f * s;
     float top = rect.top + 74.0f * s;
     const int rowCount = settingsPage_ == 0 ? 7 : settingsPage_ == 1 ? 6 :
-                         settingsPage_ == 3 ? 6 : settingsPage_ == 4 ? 7 : 5;
+                         settingsPage_ == 3 ? 6 : settingsPage_ == 4 ? 7 :
+                         settingsPage_ == 5 ? 0 : 5;
     for (int row = 0; row < rowCount; ++row) {
         if (point_in_rect(x, y, D2D1::RectF(left, top, right, top + 60.0f * s))) return row;
         top += 68.0f * s;

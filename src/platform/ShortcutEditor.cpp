@@ -1,13 +1,13 @@
 #include "ShortcutEditor.h"
 
 #include <commctrl.h>
-#include <dwmapi.h>
 #include <shellapi.h>
 #include <shlobj.h>
 #include <shobjidl.h>
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cwchar>
 #include <cwctype>
 #include <filesystem>
@@ -81,13 +81,16 @@ ShortcutEditor::~ShortcutEditor() {
     destroy_resources();
 }
 
-void ShortcutEditor::show(HWND owner, HINSTANCE instance, std::function<void()> changed) {
-    owner_ = owner;
+void ShortcutEditor::show_embedded(HWND parent, HINSTANCE instance, RECT bounds, int radius,
+                                   std::function<void()> changed) {
+    owner_ = parent;
     instance_ = instance;
     changed_ = std::move(changed);
     if (hwnd_) {
-        ShowWindow(hwnd_, SW_SHOWNORMAL);
-        SetForegroundWindow(hwnd_);
+        settings_ = Settings::load();
+        resize_embedded(bounds, radius);
+        switch_page(commandsPage_);
+        ShowWindow(hwnd_, SW_SHOW);
         return;
     }
 
@@ -107,25 +110,38 @@ void ShortcutEditor::show(HWND owner, HINSTANCE instance, std::function<void()> 
         registered = true;
     }
 
-    RECT ownerRect{};
-    GetWindowRect(owner_, &ownerRect);
-    const int width = 760;
-    const int height = 640;
-    const int x = ownerRect.left + ((ownerRect.right - ownerRect.left) - width) / 2;
-    const int y = ownerRect.top + ((ownerRect.bottom - ownerRect.top) - height) / 2;
-    hwnd_ = CreateWindowExW(WS_EX_APPWINDOW, kWindowClass, L"Shortcuts", 
-                            WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
-                            x, y, width, height, owner_, nullptr, instance_, this);
+    hwnd_ = CreateWindowExW(0, kWindowClass, L"Shortcuts", WS_CHILD | WS_CLIPCHILDREN,
+                            bounds.left, bounds.top, bounds.right - bounds.left,
+                            bounds.bottom - bounds.top, owner_, nullptr, instance_, this);
     if (!hwnd_) return;
 
+    resize_embedded(bounds, radius);
     apps_ = discover_apps();
     switch_page(false);
-
-    const BOOL darkMode = TRUE;
-    DwmSetWindowAttribute(hwnd_, DWMWA_USE_IMMERSIVE_DARK_MODE, &darkMode, sizeof(darkMode));
-    ShowWindow(hwnd_, SW_SHOWNORMAL);
+    ShowWindow(hwnd_, SW_SHOW);
     UpdateWindow(hwnd_);
-    SetForegroundWindow(hwnd_);
+}
+
+void ShortcutEditor::hide() {
+    if (hwnd_) ShowWindow(hwnd_, SW_HIDE);
+}
+
+void ShortcutEditor::resize_embedded(RECT bounds, int radius) {
+    if (!hwnd_) return;
+    const int width = std::max(1L, bounds.right - bounds.left);
+    const int height = std::max(1L, bounds.bottom - bounds.top);
+    if (EqualRect(&bounds, &embeddedBounds_) && radius == embeddedRadius_) {
+        layout_controls();
+        return;
+    }
+    embeddedBounds_ = bounds;
+    embeddedRadius_ = radius;
+    SetWindowPos(hwnd_, nullptr, bounds.left, bounds.top, width, height,
+                 SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW);
+    HRGN region = CreateRoundRectRgn(0, 0, width + 1, height + 1,
+                                     std::max(0, radius * 2), std::max(0, radius * 2));
+    if (region && SetWindowRgn(hwnd_, region, TRUE) == 0) DeleteObject(region);
+    layout_controls();
 }
 
 LRESULT CALLBACK ShortcutEditor::window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
@@ -144,12 +160,23 @@ LRESULT ShortcutEditor::handle_message(UINT message, WPARAM wParam, LPARAM lPara
     switch (message) {
         case WM_CREATE:
             create_controls();
+            layout_controls();
+            return 0;
+        case WM_PAINT: {
+            PAINTSTRUCT paint{};
+            const HDC dc = BeginPaint(hwnd_, &paint);
+            FillRect(dc, &paint.rcPaint, backgroundBrush_);
+            EndPaint(hwnd_, &paint);
+            return 0;
+        }
+        case WM_SIZE:
+            layout_controls();
             return 0;
         case WM_ERASEBKGND:
             return 1;
         case WM_CTLCOLORSTATIC:
             SetTextColor(reinterpret_cast<HDC>(wParam), RGB(224, 224, 230));
-            SetBkColor(reinterpret_cast<HDC>(wParam), RGB(18, 18, 20));
+            SetBkColor(reinterpret_cast<HDC>(wParam), RGB(0, 0, 0));
             return reinterpret_cast<LRESULT>(backgroundBrush_);
         case WM_CTLCOLOREDIT:
             SetTextColor(reinterpret_cast<HDC>(wParam), RGB(244, 244, 245));
@@ -195,7 +222,7 @@ LRESULT ShortcutEditor::handle_message(UINT message, WPARAM wParam, LPARAM lPara
             return 0;
         }
         case WM_CLOSE:
-            DestroyWindow(hwnd_);
+            hide();
             return 0;
         case WM_NCDESTROY:
             destroy_resources();
@@ -209,30 +236,22 @@ LRESULT ShortcutEditor::handle_message(UINT message, WPARAM wParam, LPARAM lPara
 }
 
 void ShortcutEditor::create_controls() {
-    backgroundBrush_ = CreateSolidBrush(RGB(18, 18, 20));
+    backgroundBrush_ = CreateSolidBrush(RGB(0, 0, 0));
     fieldBrush_ = CreateSolidBrush(RGB(31, 31, 35));
     font_ = CreateFontW(-15, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                         OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                         DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI Variable Text");
-    titleFont_ = CreateFontW(-24, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-                             OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                             DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI Variable Text");
+    appsTab_ = CreateWindowExW(0, WC_BUTTONW, L"Apps", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP,
+                               0, 0, 1, 1, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kAppsTab)), instance_, nullptr);
+    commandsTab_ = CreateWindowExW(0, WC_BUTTONW, L"Commands", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP,
+                                   0, 0, 1, 1, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kCommandsTab)), instance_, nullptr);
 
-    title_ = CreateWindowExW(0, WC_STATICW, L"Shortcuts", WS_CHILD | WS_VISIBLE,
-                             24, 18, 700, 34, hwnd_, nullptr, instance_, nullptr);
-    subtitle_ = CreateWindowExW(0, WC_STATICW, L"Add apps and commands to your widgets",
-                                WS_CHILD | WS_VISIBLE, 26, 52, 700, 22, hwnd_, nullptr, instance_, nullptr);
-    appsTab_ = CreateWindowExW(0, WC_BUTTONW, L"Apps", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                               24, 88, 110, 32, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kAppsTab)), instance_, nullptr);
-    commandsTab_ = CreateWindowExW(0, WC_BUTTONW, L"Commands", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                                   140, 88, 110, 32, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kCommandsTab)), instance_, nullptr);
-
-    search_ = CreateWindowExW(0, WC_EDITW, L"", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
-                              24, 132, 700, 32, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kAppSearch)), instance_, nullptr);
+    search_ = CreateWindowExW(0, WC_EDITW, L"", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP,
+                              0, 0, 1, 1, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kAppSearch)), instance_, nullptr);
     SendMessageW(search_, EM_SETCUEBANNER, TRUE, reinterpret_cast<LPARAM>(L"Search installed apps"));
     appList_ = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
-                               WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS,
-                               24, 174, 700, 330, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kAppList)), instance_, nullptr);
+                               WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_TABSTOP,
+                               0, 0, 1, 1, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kAppList)), instance_, nullptr);
     ListView_SetExtendedListViewStyle(appList_, LVS_EX_FULLROWSELECT | LVS_EX_CHECKBOXES | LVS_EX_DOUBLEBUFFER);
     LVCOLUMNW column{LVCF_TEXT | LVCF_WIDTH};
     column.pszText = const_cast<LPWSTR>(L"Installed applications");
@@ -242,32 +261,32 @@ void ShortcutEditor::create_controls() {
     column.cx = 360;
     ListView_InsertColumn(appList_, 1, &column);
     appHint_ = CreateWindowExW(0, WC_STATICW,
-                               L"Check an app to add it to the Apps widget. Up to four apps can be shown.",
-                               WS_CHILD | WS_VISIBLE, 26, 516, 560, 24, hwnd_, nullptr, instance_, nullptr);
+                               L"Check an app to show it.",
+                               WS_CHILD | WS_VISIBLE, 0, 0, 1, 1, hwnd_, nullptr, instance_, nullptr);
     addAppButton_ = CreateWindowExW(0, WC_BUTTONW, L"Add selected app",
-                                    WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                                    574, 510, 150, 34, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kAddApp)), instance_, nullptr);
+                                    WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP,
+                                    0, 0, 1, 1, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kAddApp)), instance_, nullptr);
 
     commandLabelCaption_ = CreateWindowExW(0, WC_STATICW, L"Name", WS_CHILD,
-                                           24, 132, 80, 22, hwnd_, nullptr, instance_, nullptr);
-    commandLabel_ = CreateWindowExW(0, WC_EDITW, L"", WS_CHILD | WS_BORDER | ES_AUTOHSCROLL,
-                                    106, 128, 250, 32, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kCommandLabel)), instance_, nullptr);
+                                           0, 0, 1, 1, hwnd_, nullptr, instance_, nullptr);
+    commandLabel_ = CreateWindowExW(0, WC_EDITW, L"", WS_CHILD | WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP,
+                                    0, 0, 1, 1, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kCommandLabel)), instance_, nullptr);
     commandTargetCaption_ = CreateWindowExW(0, WC_STATICW, L"Target", WS_CHILD,
-                                            24, 172, 80, 22, hwnd_, nullptr, instance_, nullptr);
-    commandTarget_ = CreateWindowExW(0, WC_EDITW, L"", WS_CHILD | WS_BORDER | ES_AUTOHSCROLL,
-                                     106, 168, 500, 32, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kCommandTarget)), instance_, nullptr);
-    browseButton_ = CreateWindowExW(0, WC_BUTTONW, L"Browse…", WS_CHILD | BS_PUSHBUTTON,
-                                    614, 168, 110, 32, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kBrowseTarget)), instance_, nullptr);
+                                            0, 0, 1, 1, hwnd_, nullptr, instance_, nullptr);
+    commandTarget_ = CreateWindowExW(0, WC_EDITW, L"", WS_CHILD | WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP,
+                                     0, 0, 1, 1, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kCommandTarget)), instance_, nullptr);
+    browseButton_ = CreateWindowExW(0, WC_BUTTONW, L"Browse…", WS_CHILD | BS_PUSHBUTTON | WS_TABSTOP,
+                                    0, 0, 1, 1, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kBrowseTarget)), instance_, nullptr);
     commandArgumentsCaption_ = CreateWindowExW(0, WC_STATICW, L"Arguments", WS_CHILD,
-                                               24, 212, 80, 22, hwnd_, nullptr, instance_, nullptr);
-    commandArguments_ = CreateWindowExW(0, WC_EDITW, L"", WS_CHILD | WS_BORDER | ES_AUTOHSCROLL,
-                                        106, 208, 618, 32, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kCommandArguments)), instance_, nullptr);
+                                               0, 0, 1, 1, hwnd_, nullptr, instance_, nullptr);
+    commandArguments_ = CreateWindowExW(0, WC_EDITW, L"", WS_CHILD | WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP,
+                                        0, 0, 1, 1, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kCommandArguments)), instance_, nullptr);
     addCommandButton_ = CreateWindowExW(0, WC_BUTTONW, L"Add command",
-                                        WS_CHILD | BS_PUSHBUTTON, 544, 252, 180, 34,
+                                        WS_CHILD | BS_PUSHBUTTON | WS_TABSTOP, 0, 0, 1, 1,
                                         hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kAddCommand)), instance_, nullptr);
     commandList_ = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
-                                   WS_CHILD | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS,
-                                   24, 302, 700, 202, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kCommandList)), instance_, nullptr);
+                                   WS_CHILD | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_TABSTOP,
+                                   0, 0, 1, 1, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kCommandList)), instance_, nullptr);
     ListView_SetExtendedListViewStyle(commandList_, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
     column.pszText = const_cast<LPWSTR>(L"Name");
     column.cx = 220;
@@ -276,24 +295,64 @@ void ShortcutEditor::create_controls() {
     column.cx = 460;
     ListView_InsertColumn(commandList_, 1, &column);
     removeCommandButton_ = CreateWindowExW(0, WC_BUTTONW, L"Remove selected",
-                                           WS_CHILD | BS_PUSHBUTTON, 574, 516, 150, 34,
+                                           WS_CHILD | BS_PUSHBUTTON | WS_TABSTOP, 0, 0, 1, 1,
                                            hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kRemoveCommand)), instance_, nullptr);
 
-    const std::array<HWND, 18> controls{
-        title_, subtitle_, appsTab_, commandsTab_, search_, appList_, appHint_, addAppButton_,
+    const std::array<HWND, 16> controls{
+        appsTab_, commandsTab_, search_, appList_, appHint_, addAppButton_,
         commandLabelCaption_, commandLabel_, commandTargetCaption_, commandTarget_, browseButton_,
         commandArgumentsCaption_, commandArguments_, addCommandButton_, commandList_, removeCommandButton_};
     for (HWND control : controls) apply_font(control, font_);
-    apply_font(title_, titleFont_);
 
     appImages_ = ImageList_Create(32, 32, ILC_COLOR32 | ILC_MASK, 64, 32);
     ListView_SetImageList(appList_, appImages_, LVSIL_SMALL);
 }
 
+void ShortcutEditor::layout_controls() {
+    if (!hwnd_) return;
+    RECT client{};
+    GetClientRect(hwnd_, &client);
+    const int width = std::max(1L, client.right - client.left);
+    const int height = std::max(1L, client.bottom - client.top);
+    const UINT dpi = GetDpiForWindow(hwnd_);
+    const float scale = dpi == 0 ? 1.0f : static_cast<float>(dpi) / 96.0f;
+    const auto px = [scale](float value) { return static_cast<int>(std::lround(value * scale)); };
+    const int pad = px(10.0f);
+    const int gap = px(6.0f);
+    const int buttonHeight = px(28.0f);
+    const int tabsWidth = px(92.0f);
+
+    MoveWindow(appsTab_, pad, px(4.0f), tabsWidth, buttonHeight, TRUE);
+    MoveWindow(commandsTab_, pad + tabsWidth + gap, px(4.0f), px(112.0f), buttonHeight, TRUE);
+
+    MoveWindow(search_, pad, px(40.0f), width - pad * 2, px(30.0f), TRUE);
+    MoveWindow(appList_, pad, px(78.0f), width - pad * 2,
+               std::max(px(170.0f), height - px(136.0f)), TRUE);
+    ListView_SetColumnWidth(appList_, 0, std::max(1, (width - pad * 2) * 3 / 5));
+    ListView_SetColumnWidth(appList_, 1, std::max(1, (width - pad * 2) * 2 / 5));
+    MoveWindow(appHint_, pad, height - px(45.0f), width - px(156.0f), px(24.0f), TRUE);
+    MoveWindow(addAppButton_, width - px(146.0f), height - px(48.0f), px(136.0f), px(32.0f), TRUE);
+
+    const int labelWidth = px(72.0f);
+    const int fieldLeft = pad + labelWidth;
+    MoveWindow(commandLabelCaption_, pad, px(43.0f), labelWidth, px(22.0f), TRUE);
+    MoveWindow(commandLabel_, fieldLeft, px(39.0f), width - fieldLeft - pad, px(30.0f), TRUE);
+    MoveWindow(commandTargetCaption_, pad, px(80.0f), labelWidth, px(22.0f), TRUE);
+    MoveWindow(commandTarget_, fieldLeft, px(76.0f), width - fieldLeft - px(78.0f), px(30.0f), TRUE);
+    MoveWindow(browseButton_, width - px(72.0f), px(76.0f), px(62.0f), px(30.0f), TRUE);
+    MoveWindow(commandArgumentsCaption_, pad, px(117.0f), labelWidth, px(22.0f), TRUE);
+    MoveWindow(commandArguments_, fieldLeft, px(113.0f), width - fieldLeft - pad, px(30.0f), TRUE);
+    MoveWindow(addCommandButton_, width - px(122.0f), px(151.0f), px(112.0f), buttonHeight, TRUE);
+    MoveWindow(commandList_, pad, px(187.0f), width - pad * 2,
+               std::max(px(120.0f), height - px(234.0f)), TRUE);
+    ListView_SetColumnWidth(commandList_, 0, std::max(1, (width - pad * 2) * 2 / 5));
+    ListView_SetColumnWidth(commandList_, 1, std::max(1, (width - pad * 2) * 3 / 5));
+    MoveWindow(removeCommandButton_, width - px(136.0f), height - px(43.0f), px(126.0f), px(32.0f), TRUE);
+}
+
 void ShortcutEditor::switch_page(bool commands) {
     commandsPage_ = commands;
-    set_text(subtitle_, commands ? L"Create commands with a target and optional arguments"
-                                 : L"Search installed apps and choose the ones to show");
+    layout_controls();
     show_control(search_, !commands);
     show_control(appList_, !commands);
     show_control(appHint_, !commands);
@@ -470,10 +529,6 @@ void ShortcutEditor::destroy_resources() {
         DeleteObject(font_);
         font_ = nullptr;
     }
-    if (titleFont_) {
-        DeleteObject(titleFont_);
-        titleFont_ = nullptr;
-    }
     if (backgroundBrush_) {
         DeleteObject(backgroundBrush_);
         backgroundBrush_ = nullptr;
@@ -482,10 +537,12 @@ void ShortcutEditor::destroy_resources() {
         DeleteObject(fieldBrush_);
         fieldBrush_ = nullptr;
     }
-    title_ = subtitle_ = appsTab_ = commandsTab_ = search_ = appList_ = appHint_ = addAppButton_ = nullptr;
+    appsTab_ = commandsTab_ = search_ = appList_ = appHint_ = addAppButton_ = nullptr;
     commandLabelCaption_ = commandLabel_ = commandTargetCaption_ = commandTarget_ = nullptr;
     commandArgumentsCaption_ = commandArguments_ = browseButton_ = addCommandButton_ = nullptr;
     commandList_ = removeCommandButton_ = nullptr;
+    SetRectEmpty(&embeddedBounds_);
+    embeddedRadius_ = 0;
 }
 
 std::vector<ShortcutEditor::InstalledApp> ShortcutEditor::discover_apps() {

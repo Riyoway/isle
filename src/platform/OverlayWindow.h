@@ -51,6 +51,7 @@ private:
     void set_expanded(bool expanded);
     void set_settings_mode(bool enabled);
     void open_shortcut_editor();
+    void update_shortcut_editor_bounds();
     void toggle_manual_hidden();
     bool foreground_is_fullscreen() const;
     bool hit_test_gear(float x, float y) const;

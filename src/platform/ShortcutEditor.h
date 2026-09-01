@@ -22,13 +22,17 @@ public:
 
     ~ShortcutEditor();
 
-    void show(HWND owner, HINSTANCE instance, std::function<void()> changed);
+    void show_embedded(HWND parent, HINSTANCE instance, RECT bounds, int radius,
+                       std::function<void()> changed);
+    void hide();
+    void resize_embedded(RECT bounds, int radius);
 
 private:
     static LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
     LRESULT handle_message(UINT message, WPARAM wParam, LPARAM lParam);
 
     void create_controls();
+    void layout_controls();
     void switch_page(bool commands);
     void populate_apps();
     void populate_commands();
@@ -52,13 +56,10 @@ private:
     std::function<void()> changed_;
 
     HFONT font_{};
-    HFONT titleFont_{};
     HBRUSH backgroundBrush_{};
     HBRUSH fieldBrush_{};
     HIMAGELIST appImages_{};
 
-    HWND title_{};
-    HWND subtitle_{};
     HWND appsTab_{};
     HWND commandsTab_{};
     HWND search_{};
@@ -79,6 +80,8 @@ private:
     std::vector<InstalledApp> apps_;
     bool commandsPage_{false};
     bool refreshing_{false};
+    RECT embeddedBounds_{};
+    int embeddedRadius_{0};
 };
 
 } // namespace isle

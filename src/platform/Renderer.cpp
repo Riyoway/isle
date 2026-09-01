@@ -899,10 +899,12 @@ void Renderer::draw_settings(const RenderState& state, const D2D1_RECT_F& rect) 
     const wchar_t* title = state.settingsPage == 1 ? L"Widget Editor" :
                            state.settingsPage == 2 ? L"Appearance" :
                            state.settingsPage == 4 ? L"Select Providers" :
+                           state.settingsPage == 5 ? L"Shortcuts" :
                            state.settingsPage == 3 ? L"AI Providers" : L"Settings";
     const wchar_t* subtitle = state.settingsPage == 1 ? L"Show, hide and arrange cards" :
                                state.settingsPage == 2 ? L"Shape, size and monitor position" :
                                state.settingsPage == 4 ? L"Choose several providers" :
+                               state.settingsPage == 5 ? L"Apps and commands" :
                                state.settingsPage == 3 ? L"Icon, color and compact usage rings" : L"Isle preferences";
 
     titleFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
@@ -1032,6 +1034,8 @@ void Renderer::draw_settings(const RenderState& state, const D2D1_RECT_F& rect) 
         drawRow(3, L"Reset position", L"Return to the current top center", 63, std::nullopt, L"Reset", false);
         drawRow(4, L"Monitor at cursor", L"Move Isle to the active display", 64, state.monitorAtCursor,
                  nullptr, false);
+    } else if (state.settingsPage == 5) {
+        // The native shortcut editor is embedded below this header.
     } else {
         const int provider = std::clamp(state.selectedAiProvider, 0, static_cast<int>(kAIProviders.size() - 1));
         const std::wstring selected = std::to_wstring(state.aiVisibleCount) + L" selected · choose several";
@@ -1078,6 +1082,7 @@ void Renderer::draw_settings(const RenderState& state, const D2D1_RECT_F& rect) 
         }
     }
 
+    if (state.settingsPage == 5) return;
     smallFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
     draw_text(state.settingsPage == 2 ? L"Drag the island header · panels open away from screen edges" :
               state.settingsPage == 4 ? L"Selected providers appear together in the AI widget" :
