@@ -81,7 +81,7 @@ bool OverlayWindow::create(HINSTANCE instance, int showCommand) {
 
     // Native shortcut controls need the window's redirection surface to paint above DComp.
     const DWORD exStyle = WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
-    const DWORD style = WS_POPUP;
+    const DWORD style = WS_POPUP | WS_CLIPCHILDREN;
 
     hwnd_ = CreateWindowExW(exStyle, kWindowClass, L"Isle", style,
                             0, 0, static_cast<int>(maxWidthPx_), static_cast<int>(maxHeightPx_),
@@ -798,13 +798,20 @@ void OverlayWindow::open_shortcut_editor() {
 
 void OverlayWindow::update_shortcut_editor_bounds() {
     if (!shortcutEditor_ || !settingsMode_ || settingsPage_ != 5 || !expanded_) return;
-    const auto island = renderer_.island_rect(renderState_);
     const float s = renderState_.dpiScale;
+    // Keep the native editor on the final panel bounds while the island spring animates.
+    // Resizing it from island_rect() briefly collapses the child to a one-pixel region.
+    const float width = kExpandedWidth * s;
+    const float height = kSettingsHeight * s;
+    const float left = (static_cast<float>(renderer_.width()) - width) * 0.5f;
+    const float top = renderState_.expandUp
+        ? static_cast<float>(renderer_.height()) - 8.0f * s - height
+        : 8.0f * s;
     const RECT bounds{
-        static_cast<LONG>(std::lround(island.left)),
-        static_cast<LONG>(std::lround(island.top + 64.0f * s)),
-        static_cast<LONG>(std::lround(island.right)),
-        static_cast<LONG>(std::lround(island.bottom))};
+        static_cast<LONG>(std::lround(left)),
+        static_cast<LONG>(std::lround(top + 64.0f * s)),
+        static_cast<LONG>(std::lround(left + width)),
+        static_cast<LONG>(std::lround(top + height))};
     shortcutEditor_->resize_embedded(bounds, static_cast<int>(24.0f * s));
 }
 

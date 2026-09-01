@@ -104,6 +104,8 @@ void ShortcutEditor::show_embedded(HWND parent, HINSTANCE instance, RECT bounds,
         start_app_discovery();
         switch_page(commandsPage_);
         ShowWindow(hwnd_, SW_SHOW);
+        RedrawWindow(hwnd_, nullptr, nullptr,
+                     RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN);
         return;
     }
 
@@ -133,6 +135,8 @@ void ShortcutEditor::show_embedded(HWND parent, HINSTANCE instance, RECT bounds,
     start_app_discovery();
     ShowWindow(hwnd_, SW_SHOW);
     UpdateWindow(hwnd_);
+    RedrawWindow(hwnd_, nullptr, nullptr,
+                 RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN);
 }
 
 void ShortcutEditor::hide() {
@@ -144,7 +148,6 @@ void ShortcutEditor::resize_embedded(RECT bounds, int radius) {
     const int width = std::max(1L, bounds.right - bounds.left);
     const int height = std::max(1L, bounds.bottom - bounds.top);
     if (EqualRect(&bounds, &embeddedBounds_) && radius == embeddedRadius_) {
-        layout_controls();
         return;
     }
     embeddedBounds_ = bounds;
@@ -155,6 +158,8 @@ void ShortcutEditor::resize_embedded(RECT bounds, int radius) {
                                      std::max(0, radius * 2), std::max(0, radius * 2));
     if (region && SetWindowRgn(hwnd_, region, TRUE) == 0) DeleteObject(region);
     layout_controls();
+    RedrawWindow(hwnd_, nullptr, nullptr,
+                 RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN);
 }
 
 LRESULT CALLBACK ShortcutEditor::window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
