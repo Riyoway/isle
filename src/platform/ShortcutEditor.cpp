@@ -31,6 +31,9 @@ constexpr int kBrowseTarget = 1204;
 constexpr int kAddCommand = 1205;
 constexpr int kCommandList = 1206;
 constexpr int kRemoveCommand = 1207;
+constexpr UINT_PTR kAppLoadTimer = 2;
+constexpr int kAppLoadBatchSize = 12;
+constexpr std::size_t kMaxApps = 500;
 
 bool visible_match(std::wstring_view query, const ShortcutEditor::InstalledApp& app) {
     if (query.empty()) return true;
@@ -74,10 +77,19 @@ void apply_font(HWND control, HFONT font) {
     if (control && font) SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
 }
 
+std::int64_t file_stamp(const std::filesystem::path& path) {
+    std::error_code ec;
+    const auto value = std::filesystem::last_write_time(path, ec);
+    return ec ? 0 : static_cast<std::int64_t>(value.time_since_epoch().count());
+}
+
 } // namespace
 
 ShortcutEditor::~ShortcutEditor() {
-    if (hwnd_) DestroyWindow(hwnd_);
+    if (hwnd_) {
+        KillTimer(hwnd_, kAppLoadTimer);
+        DestroyWindow(hwnd_);
+    }
     destroy_resources();
 }
 
@@ -88,8 +100,8 @@ void ShortcutEditor::show_embedded(HWND parent, HINSTANCE instance, RECT bounds,
     changed_ = std::move(changed);
     if (hwnd_) {
         settings_ = Settings::load();
-        apps_ = discover_apps();
         resize_embedded(bounds, radius);
+        start_app_discovery();
         switch_page(commandsPage_);
         ShowWindow(hwnd_, SW_SHOW);
         return;
@@ -117,8 +129,8 @@ void ShortcutEditor::show_embedded(HWND parent, HINSTANCE instance, RECT bounds,
     if (!hwnd_) return;
 
     resize_embedded(bounds, radius);
-    apps_ = discover_apps();
     switch_page(false);
+    start_app_discovery();
     ShowWindow(hwnd_, SW_SHOW);
     UpdateWindow(hwnd_);
 }
@@ -173,6 +185,9 @@ LRESULT ShortcutEditor::handle_message(UINT message, WPARAM wParam, LPARAM lPara
         case WM_SIZE:
             layout_controls();
             return 0;
+        case WM_TIMER:
+            if (wParam == kAppLoadTimer) load_app_batch();
+            return 0;
         case WM_ERASEBKGND:
             return 1;
         case WM_CTLCOLORSTATIC:
@@ -226,6 +241,7 @@ LRESULT ShortcutEditor::handle_message(UINT message, WPARAM wParam, LPARAM lPara
             hide();
             return 0;
         case WM_NCDESTROY:
+            KillTimer(hwnd_, kAppLoadTimer);
             destroy_resources();
             hwnd_ = nullptr;
             owner_ = nullptr;
@@ -372,6 +388,147 @@ void ShortcutEditor::switch_page(bool commands) {
     if (commands) populate_commands();
     else populate_apps();
     SetFocus(commands ? commandLabel_ : search_);
+}
+
+void ShortcutEditor::start_app_discovery() {
+    if (!hwnd_ || !appList_) return;
+    KillTimer(hwnd_, kAppLoadTimer);
+    appLoading_ = true;
+    appRootIndex_ = 0;
+    appIterator_.reset();
+    appRoots_.clear();
+    appSeen_.clear();
+    nextAppCache_.clear();
+
+    if (!appCache_.empty()) {
+        apps_.clear();
+        apps_.reserve(appCache_.size());
+        for (const auto& entry : appCache_) apps_.push_back(entry.app);
+        std::ranges::sort(apps_, [](const InstalledApp& left, const InstalledApp& right) {
+            return _wcsicmp(left.label.c_str(), right.label.c_str()) < 0;
+        });
+    }
+    populate_apps();
+    set_text(appHint_, apps_.empty() ? L"Loading installed apps…" : L"Refreshing installed apps…");
+
+    for (const KNOWNFOLDERID folder : {FOLDERID_Programs, FOLDERID_CommonPrograms}) {
+        PWSTR raw = nullptr;
+        if (SUCCEEDED(SHGetKnownFolderPath(folder, KF_FLAG_DEFAULT, nullptr, &raw))) {
+            appRoots_.emplace_back(raw);
+            CoTaskMemFree(raw);
+        }
+    }
+    SetTimer(hwnd_, kAppLoadTimer, 16, nullptr);
+}
+
+void ShortcutEditor::load_app_batch() {
+    if (!appLoading_) return;
+    const std::filesystem::recursive_directory_iterator end;
+    int processed = 0;
+    while (processed < kAppLoadBatchSize && appSeen_.size() < kMaxApps) {
+        if (!appIterator_) {
+            while (appRootIndex_ < appRoots_.size()) {
+                std::error_code ec;
+                auto iterator = std::make_unique<std::filesystem::recursive_directory_iterator>(
+                    appRoots_[appRootIndex_], std::filesystem::directory_options::skip_permission_denied, ec);
+                if (!ec && *iterator != end) {
+                    appIterator_ = std::move(iterator);
+                    break;
+                }
+                ++appRootIndex_;
+            }
+            if (!appIterator_) {
+                finish_app_discovery();
+                return;
+            }
+        }
+
+        const auto path = appIterator_->operator*().path();
+        std::error_code fileError;
+        const bool regular = appIterator_->operator*().is_regular_file(fileError);
+        std::error_code iteratorError;
+        appIterator_->increment(iteratorError);
+        if (iteratorError) {
+            appIterator_.reset();
+            ++appRootIndex_;
+        }
+        ++processed;
+        if (regular) append_app(path);
+    }
+
+    if (appSeen_.size() >= kMaxApps) {
+        finish_app_discovery();
+        return;
+    }
+    if (!commandsPage_) populate_apps();
+    std::wstring status = appLoading_ ? L"Loading installed apps… " : L"";
+    status += std::to_wstring(apps_.size());
+    set_text(appHint_, status);
+}
+
+void ShortcutEditor::finish_app_discovery() {
+    if (!appLoading_) return;
+    KillTimer(hwnd_, kAppLoadTimer);
+    appLoading_ = false;
+    appIterator_.reset();
+    appRoots_.clear();
+    apps_.erase(std::remove_if(apps_.begin(), apps_.end(), [&](const InstalledApp& app) {
+        return std::ranges::none_of(nextAppCache_, [&](const CachedApp& entry) {
+            return same_path(entry.app.path, app.path);
+        });
+    }), apps_.end());
+    appCache_ = std::move(nextAppCache_);
+    std::ranges::sort(apps_, [](const InstalledApp& left, const InstalledApp& right) {
+        return _wcsicmp(left.label.c_str(), right.label.c_str()) < 0;
+    });
+    appImageCacheValid_ = appImages_ != nullptr;
+    set_text(appHint_, L"Check an app to show it.");
+    if (!commandsPage_) populate_apps();
+}
+
+bool ShortcutEditor::append_app(const std::filesystem::path& path) {
+    std::wstring extension = path.extension().wstring();
+    std::ranges::transform(extension, extension.begin(), [](wchar_t ch) {
+        return static_cast<wchar_t>(std::towlower(ch));
+    });
+    if (extension != L".lnk" && extension != L".url" && extension != L".exe") return false;
+
+    const std::wstring appPath = path.wstring();
+    const std::wstring key = lower(appPath);
+    if (std::ranges::find(appSeen_, key) != appSeen_.end()) return false;
+    appSeen_.push_back(key);
+
+    const std::int64_t modified = file_stamp(path);
+    // ponytail: linear lookup is bounded by the 500-item picker; use a map if that cap grows.
+    const auto cached = std::ranges::find_if(appCache_, [&](const CachedApp& entry) {
+        return entry.modified == modified && same_path(entry.app.path, appPath);
+    });
+
+    InstalledApp app;
+    if (cached != appCache_.end() && appImageCacheValid_) {
+        app = cached->app;
+        app.path = appPath;
+    } else {
+        app.path = appPath;
+        app.label = path.stem().wstring();
+        SHFILEINFOW info{};
+        if (SHGetFileInfoW(app.path.c_str(), FILE_ATTRIBUTE_NORMAL, &info, sizeof(info),
+                           SHGFI_ICON | SHGFI_SMALLICON)) {
+            if (appImages_) app.imageIndex = ImageList_AddIcon(appImages_, info.hIcon);
+            DestroyIcon(info.hIcon);
+        }
+    }
+    if (app.label.empty()) return false;
+    nextAppCache_.push_back({app, modified});
+    const auto existing = std::ranges::find_if(apps_, [&](const InstalledApp& item) {
+        return same_path(item.path, app.path);
+    });
+    if (existing != apps_.end()) {
+        *existing = std::move(app);
+    } else {
+        apps_.push_back(std::move(app));
+    }
+    return true;
 }
 
 void ShortcutEditor::populate_apps() {
@@ -546,84 +703,6 @@ void ShortcutEditor::destroy_resources() {
     commandList_ = removeCommandButton_ = nullptr;
     SetRectEmpty(&embeddedBounds_);
     embeddedRadius_ = 0;
-}
-
-std::vector<ShortcutEditor::InstalledApp> ShortcutEditor::discover_apps() {
-    const auto file_stamp = [](const std::filesystem::path& path) -> std::int64_t {
-        std::error_code ec;
-        const auto value = std::filesystem::last_write_time(path, ec);
-        return ec ? 0 : static_cast<std::int64_t>(value.time_since_epoch().count());
-    };
-
-    std::vector<std::filesystem::path> roots;
-    for (const KNOWNFOLDERID folder : {FOLDERID_Programs, FOLDERID_CommonPrograms}) {
-        PWSTR raw = nullptr;
-        if (SUCCEEDED(SHGetKnownFolderPath(folder, KF_FLAG_DEFAULT, nullptr, &raw))) {
-            roots.emplace_back(raw);
-            CoTaskMemFree(raw);
-        }
-    }
-
-    std::vector<InstalledApp> result;
-    std::vector<CachedApp> nextCache;
-    std::vector<std::wstring> seen;
-    for (const auto& root : roots) {
-        std::error_code ec;
-        if (!std::filesystem::exists(root, ec)) continue;
-        std::filesystem::recursive_directory_iterator iterator(
-            root, std::filesystem::directory_options::skip_permission_denied, ec);
-        const std::filesystem::recursive_directory_iterator end;
-        for (; iterator != end && result.size() < 500; iterator.increment(ec)) {
-            if (ec) {
-                ec.clear();
-                continue;
-            }
-            if (!iterator->is_regular_file(ec)) continue;
-            const auto path = iterator->path();
-            std::wstring extension = path.extension().wstring();
-            std::ranges::transform(extension, extension.begin(), [](wchar_t ch) {
-                return static_cast<wchar_t>(std::towlower(ch));
-            });
-            if (extension != L".lnk" && extension != L".url" && extension != L".exe") continue;
-            const std::wstring key = lower(path.wstring());
-            if (std::ranges::find(seen, key) != seen.end()) continue;
-            seen.push_back(key);
-
-            const std::wstring appPath = path.wstring();
-            const std::int64_t modified = file_stamp(path);
-            // ponytail: linear lookup is bounded by the 500-item picker; use a map if that cap grows.
-            const auto cached = std::ranges::find_if(appCache_, [&](const CachedApp& entry) {
-                return entry.modified == modified && same_path(entry.app.path, appPath);
-            });
-
-            InstalledApp app;
-            if (cached != appCache_.end() && appImageCacheValid_) {
-                app = cached->app;
-                app.path = appPath;
-            } else {
-                app.path = appPath;
-                app.label = path.stem().wstring();
-                SHFILEINFOW info{};
-                if (SHGetFileInfoW(app.path.c_str(), FILE_ATTRIBUTE_NORMAL, &info, sizeof(info),
-                                   SHGFI_ICON | SHGFI_SMALLICON)) {
-                    if (appImages_) {
-                        app.imageIndex = ImageList_AddIcon(appImages_, info.hIcon);
-                    }
-                    DestroyIcon(info.hIcon);
-                }
-            }
-            if (!app.label.empty()) {
-                nextCache.push_back({app, modified});
-                result.push_back(std::move(app));
-            }
-        }
-    }
-    appCache_ = std::move(nextCache);
-    appImageCacheValid_ = appImages_ != nullptr;
-    std::ranges::sort(result, [](const InstalledApp& left, const InstalledApp& right) {
-        return _wcsicmp(left.label.c_str(), right.label.c_str()) < 0;
-    });
-    return result;
 }
 
 bool ShortcutEditor::same_path(std::wstring_view left, std::wstring_view right) noexcept {

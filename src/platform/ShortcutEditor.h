@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -40,6 +41,10 @@ private:
     void create_controls();
     void layout_controls();
     void switch_page(bool commands);
+    void start_app_discovery();
+    void load_app_batch();
+    void finish_app_discovery();
+    bool append_app(const std::filesystem::path& path);
     void populate_apps();
     void populate_commands();
     void add_selected_app();
@@ -51,7 +56,6 @@ private:
     void save_changed();
     void destroy_resources();
 
-    std::vector<InstalledApp> discover_apps();
     static bool same_path(std::wstring_view left, std::wstring_view right) noexcept;
     static std::wstring lower(std::wstring value);
 
@@ -85,6 +89,12 @@ private:
 
     std::vector<InstalledApp> apps_;
     std::vector<CachedApp> appCache_;
+    std::vector<CachedApp> nextAppCache_;
+    std::vector<std::filesystem::path> appRoots_;
+    std::unique_ptr<std::filesystem::recursive_directory_iterator> appIterator_;
+    std::vector<std::wstring> appSeen_;
+    std::size_t appRootIndex_{0};
+    bool appLoading_{false};
     bool appImageCacheValid_{false};
     bool commandsPage_{false};
     bool refreshing_{false};
