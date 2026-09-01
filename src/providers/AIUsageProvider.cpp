@@ -23,6 +23,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace isle {
@@ -468,7 +469,7 @@ std::wstring path_title(std::wstring_view path) {
         if (ch == L'_' || ch == L'-') ch = L' ';
     }
     if (title == L"five hour") return L"5 hours";
-    if (title == L"seven day" || title == L"weekly all") return L"Weekly";
+    if (title == L"seven day" || title == L"weekly all") return L"1 week";
     if (title == L"one day") return L"Daily";
     if (!title.empty() && title.front() >= L'a' && title.front() <= L'z') {
         title.front() = static_cast<wchar_t>(title.front() - L'a' + L'A');
@@ -592,6 +593,37 @@ std::vector<DirectWindow> extract_windows(const IJsonValue& root) {
     return unique;
 }
 
+std::vector<DirectWindow> extract_claude_windows(const IJsonValue& root) {
+    if (root.ValueType() != JsonValueType::Object) return extract_windows(root);
+
+    constexpr std::array<std::pair<std::wstring_view, std::wstring_view>, 6> fields{{
+        {L"five_hour", L"5 hours"},
+        {L"seven_day", L"1 week"},
+        {L"seven_day_oauth_apps", L"1 week · OAuth"},
+        {L"seven_day_opus", L"1 week · Opus"},
+        {L"seven_day_sonnet", L"1 week · Sonnet"},
+        {L"seven_day_cowork", L"1 week · Cowork"},
+    }};
+
+    std::vector<DirectWindow> windows;
+    try {
+        const auto object = root.GetObject();
+        for (const auto& [key, title] : fields) {
+            if (!object.HasKey(key.data())) continue;
+            const auto value = object.GetNamedValue(key.data());
+            if (value.ValueType() != JsonValueType::Object) continue;
+            const auto usage = value.GetObject();
+            const double percent = explicit_percent(usage).value_or(ratio_percent(usage).value_or(-1.0));
+            if (percent < 0.0) continue;
+            windows.push_back({std::wstring(title), reset_description(usage), percent});
+            if (windows.size() == 4) break;
+        }
+    } catch (...) {
+        return {};
+    }
+    return windows.empty() ? extract_windows(root) : windows;
+}
+
 std::wstring first_string_for_key(const IJsonValue& value, std::wstring_view wanted, int depth = 0) {
     if (depth > 8) return {};
     try {
@@ -684,7 +716,7 @@ DirectFetch fetch_claude() {
                     L"\r\nanthropic-beta: oauth-2025-04-20\r\n");
                 if (response && response->status >= 200 && response->status < 300) {
                     if (const auto oauthUsageRoot = parse_json(response->body)) {
-                        if (auto windows = extract_windows(*oauthUsageRoot); !windows.empty()) {
+                        if (auto windows = extract_claude_windows(*oauthUsageRoot); !windows.empty()) {
                             return {std::move(windows), {}};
                         }
                     }
@@ -709,7 +741,7 @@ DirectFetch fetch_claude() {
     if (usage->status < 200 || usage->status >= 300) return {{}, L"Unable to load Claude usage"};
     const auto usageRoot = parse_json(usage->body);
     if (!usageRoot) return {{}, L"Claude returned invalid usage JSON"};
-    auto windows = extract_windows(*usageRoot);
+    auto windows = extract_claude_windows(*usageRoot);
     if (windows.empty()) return {{}, L"Connected · no usage window returned"};
     return {std::move(windows), {}};
 }
