@@ -442,13 +442,18 @@ void ShortcutEditor::load_app_batch() {
                 return;
             }
         }
+        if (*appIterator_ == end) {
+            appIterator_.reset();
+            ++appRootIndex_;
+            continue;
+        }
 
         const auto path = appIterator_->operator*().path();
         std::error_code fileError;
         const bool regular = appIterator_->operator*().is_regular_file(fileError);
         std::error_code iteratorError;
         appIterator_->increment(iteratorError);
-        if (iteratorError) {
+        if (iteratorError || *appIterator_ == end) {
             appIterator_.reset();
             ++appRootIndex_;
         }
