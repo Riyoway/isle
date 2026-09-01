@@ -1294,11 +1294,17 @@ void Renderer::draw_waveform(D2D1_RECT_F rect, D2D1_COLOR_F color, float opacity
     const double phase = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count() * 5.4;
     if (audioReactive) update_audio_history(active);
     const auto [audioMin, audioMax] = std::minmax_element(audioHistory_.begin(), audioHistory_.end());
+    const bool meterHasSignal = audioReactive && *audioMax > 0.015f;
     for (int i = 0; i < bars; ++i) {
         const std::size_t historyIndex = static_cast<std::size_t>(i) * (audioHistory_.size() - 1) /
                                          static_cast<std::size_t>(std::max(1, bars - 1));
+        const float idleStrength = active
+            ? 0.18f + 0.16f * static_cast<float>(std::abs(std::sin(phase * 0.82 + i * 0.74)))
+            : 0.14f + 0.08f * static_cast<float>((i * 7) % 5) / 4.0f;
         const float strength = audioReactive
-            ? audio_bar_strength(audioHistory_[historyIndex], *audioMin, *audioMax)
+            ? (meterHasSignal
+                ? std::max(0.12f, audio_bar_strength(audioHistory_[historyIndex], *audioMin, *audioMax))
+                : idleStrength)
             : active
                 ? 0.22f + 0.78f * static_cast<float>(std::abs(std::sin(phase + static_cast<double>(i) * 0.86)))
                 : 0.24f + 0.13f * static_cast<float>((i * 7) % 5);
