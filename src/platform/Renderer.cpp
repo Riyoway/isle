@@ -910,15 +910,16 @@ void Renderer::draw_shortcut_widget(const RenderState& state, const std::vector<
         const auto button = D2D1::RectF(centerX - size * 0.5f, cell.top + press * 1.5f * s,
                                         centerX + size * 0.5f, cell.top + press * 1.5f * s + size);
         const float radius = state.buttonStyle == 1 ? 13.0f * s : size * 0.5f;
-        if (state.buttonStyle == 2) {
-            fill_round_rect(button, radius, accent, 0.08f * opacity);
-            stroke_round_rect(button, radius, accent, 1.3f * s, opacity);
-        } else {
-            fill_round_rect(button, radius, accent, (press > 0.01f ? 0.78f : 0.22f) * opacity);
+        if (commands) {
+            if (state.buttonStyle == 2) {
+                fill_round_rect(button, radius, accent, 0.08f * opacity);
+                stroke_round_rect(button, radius, accent, 1.3f * s, opacity);
+            } else {
+                fill_round_rect(button, radius, accent, (press > 0.01f ? 0.78f : 0.22f) * opacity);
+            }
         }
         if (!commands && shortcuts[i]->artwork) {
-            draw_artwork(*shortcuts[i], inset_rect(button, 6.0f * s),
-                         std::min(12.0f * s, size * 0.28f), opacity, false);
+            draw_artwork(*shortcuts[i], button, std::min(12.0f * s, size * 0.28f), opacity, false);
         } else {
             iconFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
             draw_text(shortcuts[i]->glyph, iconFormat_.Get(), button, accent, opacity);
@@ -1322,7 +1323,7 @@ void Renderer::draw_artwork(const Activity& activity, D2D1_RECT_F rect, float ra
     }
 
     const D2D1_COLOR_F accent = color_from_hex(activity.accent);
-    fill_round_rect(rect, radius, D2D1::ColorF(0x17171A), opacity);
+    if (frame) fill_round_rect(rect, radius, D2D1::ColorF(0x17171A), opacity);
     if (frame) {
         stroke_round_rect(inset_rect(rect, 0.7f * formatScale_), std::max(0.0f, radius - 0.7f * formatScale_),
                           accent, 1.4f * formatScale_, 0.72f * opacity);
