@@ -885,7 +885,7 @@ void Renderer::draw_shortcut_widget(const RenderState& state, const std::vector<
         }
         if (!commands && shortcuts[i]->artwork) {
             draw_artwork(*shortcuts[i], inset_rect(button, 6.0f * s),
-                         std::min(12.0f * s, size * 0.28f), opacity);
+                         std::min(12.0f * s, size * 0.28f), opacity, false);
         } else {
             iconFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
             draw_text(shortcuts[i]->glyph, iconFormat_.Get(), button, accent, opacity);
@@ -1264,7 +1264,8 @@ ID2D1Bitmap1* Renderer::artwork_bitmap(const Activity& activity) {
     return inserted ? entry->second.Get() : nullptr;
 }
 
-void Renderer::draw_artwork(const Activity& activity, D2D1_RECT_F rect, float radius, float opacity) {
+void Renderer::draw_artwork(const Activity& activity, D2D1_RECT_F rect, float radius, float opacity,
+                            bool frame) {
     if (auto* bitmap = artwork_bitmap(activity)) {
         ComPtr<ID2D1RoundedRectangleGeometry> geometry;
         ComPtr<ID2D1Layer> layer;
@@ -1280,15 +1281,19 @@ void Renderer::draw_artwork(const Activity& activity, D2D1_RECT_F rect, float ra
             d2dContext_->PushLayer(parameters, layer.Get());
             d2dContext_->DrawBitmap(bitmap, rect, 1.0f, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC);
             d2dContext_->PopLayer();
-            stroke_round_rect(rect, radius, D2D1::ColorF(0xFFFFFF), 0.8f * formatScale_, 0.13f * opacity);
+            if (frame) {
+                stroke_round_rect(rect, radius, D2D1::ColorF(0xFFFFFF), 0.8f * formatScale_, 0.13f * opacity);
+            }
             return;
         }
     }
 
     const D2D1_COLOR_F accent = color_from_hex(activity.accent);
     fill_round_rect(rect, radius, D2D1::ColorF(0x17171A), opacity);
-    stroke_round_rect(inset_rect(rect, 0.7f * formatScale_), std::max(0.0f, radius - 0.7f * formatScale_),
-                      accent, 1.4f * formatScale_, 0.72f * opacity);
+    if (frame) {
+        stroke_round_rect(inset_rect(rect, 0.7f * formatScale_), std::max(0.0f, radius - 0.7f * formatScale_),
+                          accent, 1.4f * formatScale_, 0.72f * opacity);
+    }
     iconFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
     draw_text(activity.glyph.empty() ? L"\uE8D6" : activity.glyph, iconFormat_.Get(), rect,
               accent, opacity);

@@ -69,7 +69,8 @@ private:
     ID2D1SvgDocument* provider_icon(std::wstring_view providerId, std::wstring_view accentHex);
     void draw_collapsed_ai_rings(const RenderState& state, const std::vector<Activity>& activities,
                                  const D2D1_RECT_F& rect, float opacity);
-    void draw_artwork(const Activity& activity, D2D1_RECT_F rect, float radius, float opacity);
+    void draw_artwork(const Activity& activity, D2D1_RECT_F rect, float radius, float opacity,
+                      bool frame = true);
     void draw_waveform(D2D1_RECT_F rect, D2D1_COLOR_F color, float opacity,
                        bool active, bool audioReactive = false);
     void update_audio_history(bool active);
