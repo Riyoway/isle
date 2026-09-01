@@ -128,6 +128,18 @@ std::int64_t file_stamp(const std::filesystem::path& path) {
     return ec ? 0 : static_cast<std::int64_t>(value.time_since_epoch().count());
 }
 
+std::vector<std::filesystem::path> installed_app_roots() {
+    std::vector<std::filesystem::path> roots;
+    for (const KNOWNFOLDERID folder : {FOLDERID_Programs, FOLDERID_CommonPrograms}) {
+        PWSTR raw = nullptr;
+        if (SUCCEEDED(SHGetKnownFolderPath(folder, KF_FLAG_DEFAULT, nullptr, &raw))) {
+            roots.emplace_back(raw);
+            CoTaskMemFree(raw);
+        }
+    }
+    return roots;
+}
+
 } // namespace
 
 ShortcutEditor::~ShortcutEditor() {
@@ -146,9 +158,21 @@ void ShortcutEditor::show_embedded(HWND parent, HINSTANCE instance, RECT bounds,
     if (hwnd_) {
         settings_ = Settings::load();
         resize_embedded(bounds, radius);
-        start_app_discovery();
+        const bool filesUnchanged = std::ranges::all_of(appCache_, [](const CachedApp& entry) {
+            return file_stamp(entry.app.path) == entry.modified;
+        });
+        const bool directoriesUnchanged = std::ranges::all_of(appDirectoryStamps_, [](const auto& entry) {
+            return file_stamp(entry.first) == entry.second;
+        });
+        if (!appCacheReady_ || !filesUnchanged || !directoriesUnchanged) {
+            start_app_discovery();
+        } else {
+            populate_apps();
+            set_text(appHint_, L"Select apps to show in the Apps widget.");
+        }
         switch_page(commandsPage_);
         ShowWindow(hwnd_, SW_SHOW);
+        SetForegroundWindow(hwnd_);
         RedrawWindow(hwnd_, nullptr, nullptr,
                      RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN);
         return;
@@ -191,18 +215,13 @@ void ShortcutEditor::show_embedded(HWND parent, HINSTANCE instance, RECT bounds,
 
 void ShortcutEditor::hide() {
     if (!hwnd_) return;
-    const HWND parent = owner_;
     KillTimer(hwnd_, kAppLoadTimer);
     appLoading_ = false;
     appIterator_.reset();
     appRoots_.clear();
     nextAppCache_.clear();
-    // The editor is an owned popup, so destroying it also releases its native surface.
-    DestroyWindow(hwnd_);
-    if (parent) {
-        RedrawWindow(parent, nullptr, nullptr,
-                     RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN);
-    }
+    nextDirectoryStamps_.clear();
+    ShowWindow(hwnd_, SW_HIDE);
 }
 
 void ShortcutEditor::resize_embedded(RECT bounds, int radius) {
@@ -614,6 +633,7 @@ void ShortcutEditor::start_app_discovery() {
     appRoots_.clear();
     appSeen_.clear();
     nextAppCache_.clear();
+    nextDirectoryStamps_.clear();
 
     if (!appCache_.empty()) {
         apps_.clear();
@@ -630,13 +650,8 @@ void ShortcutEditor::start_app_discovery() {
     populate_apps();
     set_text(appHint_, apps_.empty() ? L"Loading installed apps…" : L"Refreshing installed apps…");
 
-    for (const KNOWNFOLDERID folder : {FOLDERID_Programs, FOLDERID_CommonPrograms}) {
-        PWSTR raw = nullptr;
-        if (SUCCEEDED(SHGetKnownFolderPath(folder, KF_FLAG_DEFAULT, nullptr, &raw))) {
-            appRoots_.emplace_back(raw);
-            CoTaskMemFree(raw);
-        }
-    }
+    appRoots_ = installed_app_roots();
+    for (const auto& root : appRoots_) nextDirectoryStamps_.emplace_back(root, file_stamp(root));
     SetTimer(hwnd_, kAppLoadTimer, 16, nullptr);
 }
 
@@ -670,6 +685,8 @@ void ShortcutEditor::load_app_batch() {
         const auto path = appIterator_->operator*().path();
         std::error_code fileError;
         const bool regular = appIterator_->operator*().is_regular_file(fileError);
+        std::error_code directoryError;
+        const bool directory = appIterator_->operator*().is_directory(directoryError);
         std::error_code iteratorError;
         appIterator_->increment(iteratorError);
         if (iteratorError || *appIterator_ == end) {
@@ -677,6 +694,7 @@ void ShortcutEditor::load_app_batch() {
             ++appRootIndex_;
         }
         ++processed;
+        if (directory) nextDirectoryStamps_.emplace_back(path, file_stamp(path));
         if (regular) append_app(path);
     }
 
@@ -695,6 +713,7 @@ void ShortcutEditor::finish_app_discovery() {
     KillTimer(hwnd_, kAppLoadTimer);
     appLoading_ = false;
     appIterator_.reset();
+    appDirectoryStamps_ = std::move(nextDirectoryStamps_);
     appRoots_.clear();
     apps_.erase(std::remove_if(apps_.begin(), apps_.end(), [&](const InstalledApp& app) {
         return std::ranges::none_of(nextAppCache_, [&](const CachedApp& entry) {
@@ -706,6 +725,7 @@ void ShortcutEditor::finish_app_discovery() {
         return _wcsicmp(left.label.c_str(), right.label.c_str()) < 0;
     });
     appImageCacheValid_ = appImages_ != nullptr;
+    appCacheReady_ = true;
     set_text(appHint_, L"Select apps to show in the Apps widget.");
     if (!commandsPage_) populate_apps();
 }

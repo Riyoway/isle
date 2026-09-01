@@ -10,6 +10,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace isle {
@@ -92,10 +93,13 @@ private:
     std::vector<CachedApp> appCache_;
     std::vector<CachedApp> nextAppCache_;
     std::vector<std::filesystem::path> appRoots_;
+    std::vector<std::pair<std::filesystem::path, std::int64_t>> appDirectoryStamps_;
+    std::vector<std::pair<std::filesystem::path, std::int64_t>> nextDirectoryStamps_;
     std::unique_ptr<std::filesystem::recursive_directory_iterator> appIterator_;
     std::vector<std::wstring> appSeen_;
     std::size_t appRootIndex_{0};
     bool appLoading_{false};
+    bool appCacheReady_{false};
     bool appImageCacheValid_{false};
     bool commandsPage_{false};
     RECT embeddedBounds_{};
