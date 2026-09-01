@@ -1443,10 +1443,13 @@ void Renderer::draw_marquee_text(std::wstring_view text, IDWriteTextFormat* form
     if (text.empty() || !format || opacity <= 0.001f) return;
 
     const auto now = std::chrono::steady_clock::now();
-    if (std::wstring_view(marqueeText_) != text) {
+    const bool resumed = lastMarqueeDraw_.time_since_epoch().count() != 0 &&
+                         now - lastMarqueeDraw_ > std::chrono::milliseconds(450);
+    if (std::wstring_view(marqueeText_) != text || resumed) {
         marqueeText_ = text;
         marqueeStarted_ = now;
     }
+    lastMarqueeDraw_ = now;
 
     ComPtr<IDWriteTextLayout> layout;
     const float visibleWidth = rect.right - rect.left;

@@ -121,6 +121,7 @@ private:
     Microsoft::WRL::ComPtr<IDWriteTextFormat> iconFormat_;
     std::wstring marqueeText_;
     std::chrono::steady_clock::time_point marqueeStarted_{};
+    std::chrono::steady_clock::time_point lastMarqueeDraw_{};
     Microsoft::WRL::ComPtr<IMMDeviceEnumerator> audioDeviceEnumerator_;
     Microsoft::WRL::ComPtr<IAudioMeterInformation> audioMeter_;
     std::array<float, 32> audioHistory_{};
