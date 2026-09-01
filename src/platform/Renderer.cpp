@@ -842,7 +842,8 @@ void Renderer::draw_shortcut_widget(const RenderState& state, const std::vector<
     }
     constexpr int controlBase = 40;
     const int sourceOffset = commands ? static_cast<int>(kShortcutSlots) : 0;
-    const float cellWidth = (rect.right - rect.left) / static_cast<float>(shortcuts.size());
+    const float cellWidth = (rect.right - rect.left) /
+                            static_cast<float>(std::max<std::size_t>(1, count));
     for (std::size_t i = 0; i < count; ++i) {
         const float centerX = rect.left + cellWidth * (static_cast<float>(i) + 0.5f);
         const float press = state.pressedControl == controlBase + sourceOffset + static_cast<int>(i)
@@ -1051,8 +1052,6 @@ void Renderer::draw_settings(const RenderState& state, const D2D1_RECT_F& rect) 
         const std::wstring ringCount = std::to_wstring(std::clamp(state.compactRingCount, 1, 3));
         drawRow(5, L"Usage ring count", L"Show one to three selected providers", 75, std::nullopt,
                 ringCount.c_str(), false);
-        drawRow(6, L"Provider connection", L"Uses provider APIs, OAuth and local credentials", 76,
-                std::nullopt, L"Isle", false);
         }
     }
 

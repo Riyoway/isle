@@ -832,7 +832,7 @@ int OverlayWindow::hit_test_setting_row(float x, float y) const {
     const float right = rect.right - 22.0f * s;
     float top = rect.top + 74.0f * s;
     const int rowCount = settingsPage_ == 0 ? 7 : settingsPage_ == 1 ? 6 :
-                         (settingsPage_ == 3 || settingsPage_ == 4) ? 7 : 5;
+                         settingsPage_ == 3 ? 6 : settingsPage_ == 4 ? 7 : 5;
     for (int row = 0; row < rowCount; ++row) {
         if (point_in_rect(x, y, D2D1::RectF(left, top, right, top + 60.0f * s))) return row;
         top += 68.0f * s;
@@ -868,13 +868,17 @@ int OverlayWindow::hit_test_shortcut(float x, float y) const {
         const float cardWidth = card.right - card.left;
         const std::wstring_view source = widget == static_cast<int>(WidgetKind::Commands)
             ? L"shortcut.command" : L"shortcut.app";
+        const int itemCount = static_cast<int>(std::ranges::count_if(activities, [&](const Activity& activity) {
+            return activity.source == source;
+        }));
+        if (itemCount <= 0) continue;
         int item = 0;
         for (const auto& activity : activities) {
             if (activity.source != source || item >= static_cast<int>(kShortcutSlots)) continue;
-            const float halfWidth = cardWidth * 0.5f;
-            const float centerX = card.left + halfWidth * (static_cast<float>(item) + 0.5f);
-            if (point_in_rect(x, y, D2D1::RectF(centerX - halfWidth * 0.46f, card.top + 29.0f * s,
-                                                centerX + halfWidth * 0.46f, card.bottom - 3.0f * s))) {
+            const float cellWidth = cardWidth / static_cast<float>(itemCount);
+            const float centerX = card.left + cellWidth * (static_cast<float>(item) + 0.5f);
+            if (point_in_rect(x, y, D2D1::RectF(centerX - cellWidth * 0.46f, card.top + 29.0f * s,
+                                                centerX + cellWidth * 0.46f, card.bottom - 3.0f * s))) {
                 return kControlShortcutBase +
                        (widget == static_cast<int>(WidgetKind::Commands) ? static_cast<int>(kShortcutSlots) : 0) + item;
             }
