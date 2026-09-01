@@ -14,6 +14,7 @@
 #include <fstream>
 #include <iterator>
 #include <limits>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 
@@ -213,6 +214,27 @@ std::wstring duration_text(double seconds) {
     return text.data();
 }
 
+Renderer::SvgViewport svg_viewport(std::string_view markup) {
+    Renderer::SvgViewport viewport;
+    const std::size_t attribute = markup.find("viewBox");
+    if (attribute == std::string_view::npos) return viewport;
+    const std::size_t equals = markup.find('=', attribute);
+    const std::size_t quote = equals == std::string_view::npos ? std::string_view::npos
+                                                                  : markup.find_first_of("\"'", equals + 1);
+    if (quote == std::string_view::npos) return viewport;
+    const char delimiter = markup[quote];
+    const std::size_t end = markup.find(delimiter, quote + 1);
+    if (end == std::string_view::npos) return viewport;
+    std::string values(markup.substr(quote + 1, end - quote - 1));
+    std::ranges::replace(values, ',', ' ');
+    std::istringstream input(values);
+    if (!(input >> viewport.minX >> viewport.minY >> viewport.width >> viewport.height) ||
+        viewport.width <= 0.0f || viewport.height <= 0.0f) {
+        return Renderer::SvgViewport{};
+    }
+    return viewport;
+}
+
 } // namespace
 
 void Renderer::initialize(HWND hwnd, UINT widthPx, UINT heightPx) {
@@ -263,6 +285,7 @@ void Renderer::create_device_resources() {
     // Direct2D 1.3 draws the bundled provider SVGs natively. Older Windows builds fail the
     // query and every badge falls back to its text mark.
     providerIcons_.clear();
+    providerIconViewports_.clear();
     d2dContext_.As(&svgContext_);
 
     D2D1_STROKE_STYLE_PROPERTIES stroke{};
@@ -1083,6 +1106,7 @@ ID2D1SvgDocument* Renderer::provider_icon(std::wstring_view providerId, std::wst
     std::string markup{std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
     if (markup.empty() || markup.size() > 256 * 1024) return nullptr;
     tint_brand_marks(markup, accentHex);
+    providerIconViewports_[key] = svg_viewport(markup);
 
     ComPtr<IStream> stream;
     LARGE_INTEGER start{};
@@ -1091,8 +1115,8 @@ ID2D1SvgDocument* Renderer::provider_icon(std::wstring_view providerId, std::wst
         FAILED(stream->Seek(start, STREAM_SEEK_SET, nullptr))) {
         return nullptr;
     }
-    // Every asset carries a viewBox, so Direct2D fits its own coordinate system into this
-    // viewport and the caller only has to scale 100 units onto the badge.
+    // Keep a small viewport for every document; draw_provider_icon applies each asset's
+    // viewBox so 100px, 200px and 512px source artwork occupy the same badge size.
     if (FAILED(svgContext_->CreateSvgDocument(stream.Get(), D2D1::SizeF(100.0f, 100.0f),
                                               &entry->second))) {
         entry->second.Reset();
@@ -1109,10 +1133,16 @@ bool Renderer::draw_provider_icon(std::wstring_view providerId, std::wstring_vie
 
     D2D1::Matrix3x2F saved;
     d2dContext_->GetTransform(&saved);
-    const float scale = side / 100.0f;
+    const std::wstring key = std::wstring(providerId) + L'|' + std::wstring(accentHex);
+    const auto viewport = providerIconViewports_.contains(key)
+        ? providerIconViewports_.at(key) : SvgViewport{};
+    const float scale = side / std::max(viewport.width, viewport.height);
+    const float drawnWidth = viewport.width * scale;
+    const float drawnHeight = viewport.height * scale;
+    const float originX = (rect.left + rect.right - drawnWidth) * 0.5f - viewport.minX * scale;
+    const float originY = (rect.top + rect.bottom - drawnHeight) * 0.5f - viewport.minY * scale;
     d2dContext_->SetTransform(D2D1::Matrix3x2F::Scale(scale, scale) *
-                              D2D1::Matrix3x2F::Translation((rect.left + rect.right - side) * 0.5f,
-                                                            (rect.top + rect.bottom - side) * 0.5f) *
+                              D2D1::Matrix3x2F::Translation(originX, originY) *
                               saved);
     // DrawSvgDocument takes no opacity, so the expand/collapse fade needs a layer.
     const bool fading = opacity < 0.999f;

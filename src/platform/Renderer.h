@@ -23,6 +23,13 @@ namespace isle {
 
 class Renderer {
 public:
+    struct SvgViewport {
+        float minX{0.0f};
+        float minY{0.0f};
+        float width{100.0f};
+        float height{100.0f};
+    };
+
     Renderer() = default;
     ~Renderer() = default;
 
@@ -97,6 +104,7 @@ private:
     Microsoft::WRL::ComPtr<ID2D1DeviceContext> d2dContext_;
     Microsoft::WRL::ComPtr<ID2D1DeviceContext5> svgContext_;
     std::unordered_map<std::wstring, Microsoft::WRL::ComPtr<ID2D1SvgDocument>> providerIcons_;
+    std::unordered_map<std::wstring, SvgViewport> providerIconViewports_;
     Microsoft::WRL::ComPtr<ID2D1Bitmap1> targetBitmap_;
     Microsoft::WRL::ComPtr<ID2D1Bitmap1> artworkBitmap_;
     Microsoft::WRL::ComPtr<ID2D1StrokeStyle> roundStrokeStyle_;
