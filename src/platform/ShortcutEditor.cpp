@@ -26,6 +26,7 @@ constexpr int kAppsTab = 1001;
 constexpr int kCommandsTab = 1002;
 constexpr int kAppSearch = 1101;
 constexpr int kAppList = 1102;
+constexpr int kRefreshApps = 1103;
 constexpr int kCommandLabel = 1201;
 constexpr int kCommandTarget = 1202;
 constexpr int kCommandArguments = 1203;
@@ -36,6 +37,7 @@ constexpr int kRemoveCommand = 1207;
 constexpr UINT_PTR kAppLoadTimer = 2;
 constexpr int kAppLoadBatchSize = 12;
 constexpr std::size_t kMaxApps = 500;
+constexpr wchar_t kAppCacheFile[] = L"shortcut-apps.ini";
 
 bool visible_match(std::wstring_view query, const ShortcutEditor::InstalledApp& app) {
     if (query.empty()) return true;
@@ -142,6 +144,28 @@ std::vector<std::filesystem::path> installed_app_roots() {
     return roots;
 }
 
+std::filesystem::path app_cache_path() {
+    return Settings::data_directory() / kAppCacheFile;
+}
+
+std::wstring read_cache_value(const std::filesystem::path& path, const wchar_t* section,
+                              const wchar_t* key, const wchar_t* fallback = L"") {
+    std::array<wchar_t, 4096> buffer{};
+    GetPrivateProfileStringW(section, key, fallback, buffer.data(),
+                             static_cast<DWORD>(buffer.size()), path.c_str());
+    return buffer.data();
+}
+
+bool parse_cache_integer(const std::wstring& value, std::int64_t& result) {
+    try {
+        std::size_t consumed = 0;
+        result = std::stoll(value, &consumed);
+        return consumed == value.size();
+    } catch (...) {
+        return false;
+    }
+}
+
 } // namespace
 
 ShortcutEditor::~ShortcutEditor() {
@@ -160,15 +184,8 @@ void ShortcutEditor::show_embedded(HWND parent, HINSTANCE instance, RECT bounds,
     if (hwnd_) {
         settings_ = Settings::load();
         resize_embedded(bounds, radius);
-        const bool filesUnchanged = std::ranges::all_of(appCache_, [](const CachedApp& entry) {
-            return file_stamp(entry.app.path) == entry.modified;
-        });
-        const bool directoriesUnchanged = std::ranges::all_of(appDirectoryStamps_, [](const auto& entry) {
-            return file_stamp(entry.first) == entry.second;
-        });
-        if (!appCacheReady_ || !filesUnchanged || !directoriesUnchanged) {
-            start_app_discovery();
-        } else {
+        if (!appCacheReady_ && !load_app_cache()) start_app_discovery();
+        if (!appLoading_) {
             populate_apps();
             set_text(appHint_, L"Select apps to show in the Apps widget.");
         }
@@ -206,8 +223,8 @@ void ShortcutEditor::show_embedded(HWND parent, HINSTANCE instance, RECT bounds,
     const BOOL dark = TRUE;
     DwmSetWindowAttribute(hwnd_, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
     resize_embedded(bounds, radius);
+    if (!appCacheReady_ && !load_app_cache()) start_app_discovery();
     switch_page(false);
-    start_app_discovery();
     ShowWindow(hwnd_, SW_SHOW);
     UpdateWindow(hwnd_);
     SetForegroundWindow(hwnd_);
@@ -222,7 +239,6 @@ void ShortcutEditor::hide() {
     appIterator_.reset();
     appRoots_.clear();
     nextAppCache_.clear();
-    nextDirectoryStamps_.clear();
     ShowWindow(hwnd_, SW_HIDE);
 }
 
@@ -336,6 +352,7 @@ LRESULT ShortcutEditor::handle_message(UINT message, WPARAM wParam, LPARAM lPara
             const int notification = HIWORD(wParam);
             if (id == kAppsTab && notification == BN_CLICKED) switch_page(false);
             else if (id == kCommandsTab && notification == BN_CLICKED) switch_page(true);
+            else if (id == kRefreshApps && notification == BN_CLICKED) refresh_apps();
             else if (id == kAppSearch && notification == EN_CHANGE) populate_apps();
             else if (id == kBrowseTarget && notification == BN_CLICKED) browse_target();
             else if (id == kAddCommand && notification == BN_CLICKED) add_command();
@@ -408,7 +425,8 @@ LRESULT ShortcutEditor::handle_message(UINT message, WPARAM wParam, LPARAM lPara
 
                     const int index = static_cast<int>(draw->nmcd.lItemlParam);
                     if (header->hwndFrom == appList_ && index >= 0 && index < static_cast<int>(apps_.size())) {
-                        const auto& app = apps_[static_cast<std::size_t>(index)];
+                        auto& app = apps_[static_cast<std::size_t>(index)];
+                        if (app.imageIndex < 0) load_app_image(app);
                         const int iconSize = px(32.0f);
                         const int iconX = card.left + px(14.0f);
                         const int iconY = card.top + (card.bottom - card.top - iconSize) / 2;
@@ -491,6 +509,11 @@ void ShortcutEditor::create_controls() {
     search_ = CreateWindowExW(0, WC_EDITW, L"", WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL | WS_TABSTOP,
                               0, 0, 1, 1, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kAppSearch)), instance_, nullptr);
     SendMessageW(search_, EM_SETCUEBANNER, TRUE, reinterpret_cast<LPARAM>(L"Search installed apps"));
+    refreshAppsButton_ = CreateWindowExW(0, WC_BUTTONW, L"Refresh",
+                                         WS_CHILD | BS_OWNERDRAW | WS_TABSTOP,
+                                         0, 0, 1, 1, hwnd_,
+                                         reinterpret_cast<HMENU>(static_cast<INT_PTR>(kRefreshApps)),
+                                         instance_, nullptr);
     appList_ = CreateWindowExW(0, WC_LISTVIEWW, L"",
                                WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_NOCOLUMNHEADER |
                                LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_TABSTOP,
@@ -532,8 +555,8 @@ void ShortcutEditor::create_controls() {
                                            WS_CHILD | BS_OWNERDRAW | WS_TABSTOP, 0, 0, 1, 1,
                                            hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kRemoveCommand)), instance_, nullptr);
 
-    const std::array<HWND, 15> controls{
-        appsTab_, commandsTab_, search_, appList_, appHint_,
+    const std::array<HWND, 16> controls{
+        appsTab_, commandsTab_, search_, refreshAppsButton_, appList_, appHint_,
         commandLabelCaption_, commandLabel_, commandTargetCaption_, commandTarget_, browseButton_,
         commandArgumentsCaption_, commandArguments_, addCommandButton_, commandList_, removeCommandButton_};
     for (HWND control : controls) apply_font(control, font_);
@@ -576,7 +599,10 @@ void ShortcutEditor::layout_controls() {
     MoveWindow(appsTab_, pad, px(6.0f), tabsWidth, buttonHeight, TRUE);
     MoveWindow(commandsTab_, pad + tabsWidth + gap, px(6.0f), tabsWidth, buttonHeight, TRUE);
 
-    MoveWindow(search_, pad + px(10.0f), px(54.0f), width - pad * 2 - px(20.0f), px(30.0f), TRUE);
+    const int refreshWidth = px(72.0f);
+    MoveWindow(search_, pad + px(10.0f), px(54.0f),
+               std::max(1, width - pad * 2 - px(20.0f) - refreshWidth - gap), px(30.0f), TRUE);
+    MoveWindow(refreshAppsButton_, width - pad - refreshWidth, px(54.0f), refreshWidth, px(30.0f), TRUE);
     MoveWindow(appList_, pad, px(98.0f), width - pad * 2,
                std::max(px(170.0f), height - px(136.0f)), TRUE);
     RECT appClient{};
@@ -611,6 +637,7 @@ void ShortcutEditor::switch_page(bool commands) {
     InvalidateRect(hwnd_, nullptr, TRUE);
     layout_controls();
     show_control(search_, !commands);
+    show_control(refreshAppsButton_, !commands);
     show_control(appList_, !commands);
     show_control(appHint_, !commands);
     show_control(commandLabelCaption_, commands);
@@ -628,6 +655,10 @@ void ShortcutEditor::switch_page(bool commands) {
     SetFocus(commands ? commandLabel_ : search_);
 }
 
+void ShortcutEditor::refresh_apps() {
+    if (!commandsPage_) start_app_discovery();
+}
+
 void ShortcutEditor::start_app_discovery() {
     if (!hwnd_ || !appList_) return;
     KillTimer(hwnd_, kAppLoadTimer);
@@ -637,7 +668,6 @@ void ShortcutEditor::start_app_discovery() {
     appRoots_.clear();
     appSeen_.clear();
     nextAppCache_.clear();
-    nextDirectoryStamps_.clear();
 
     if (!appCache_.empty()) {
         apps_.clear();
@@ -655,7 +685,6 @@ void ShortcutEditor::start_app_discovery() {
     set_text(appHint_, apps_.empty() ? L"Loading installed apps…" : L"Refreshing installed apps…");
 
     appRoots_ = installed_app_roots();
-    for (const auto& root : appRoots_) nextDirectoryStamps_.emplace_back(root, file_stamp(root));
     SetTimer(hwnd_, kAppLoadTimer, 16, nullptr);
 }
 
@@ -699,7 +728,6 @@ void ShortcutEditor::load_app_batch() {
             ++appRootIndex_;
         }
         ++processed;
-        if (directory) nextDirectoryStamps_.emplace_back(path, file_stamp(path));
         if (regular) append_app(path);
     }
 
@@ -718,7 +746,6 @@ void ShortcutEditor::finish_app_discovery() {
     KillTimer(hwnd_, kAppLoadTimer);
     appLoading_ = false;
     appIterator_.reset();
-    appDirectoryStamps_ = std::move(nextDirectoryStamps_);
     appRoots_.clear();
     apps_.erase(std::remove_if(apps_.begin(), apps_.end(), [&](const InstalledApp& app) {
         return std::ranges::none_of(nextAppCache_, [&](const CachedApp& entry) {
@@ -731,6 +758,7 @@ void ShortcutEditor::finish_app_discovery() {
     });
     appImageCacheValid_ = appImages_ != nullptr;
     appCacheReady_ = true;
+    save_app_cache();
     set_text(appHint_, L"Select apps to show in the Apps widget.");
     if (!commandsPage_) populate_apps();
 }
@@ -763,12 +791,7 @@ bool ShortcutEditor::append_app(const std::filesystem::path& path) {
         app.path = appPath;
         app.label = label;
         app.identity = shortcut_group_key(label);
-        SHFILEINFOW info{};
-        if (SHGetFileInfoW(app.path.c_str(), FILE_ATTRIBUTE_NORMAL, &info, sizeof(info),
-                           SHGFI_ICON | SHGFI_SMALLICON)) {
-            if (appImages_) app.imageIndex = ImageList_AddIcon(appImages_, info.hIcon);
-            DestroyIcon(info.hIcon);
-        }
+        load_app_image(app);
     }
     if (app.label.empty()) return false;
     if (app.identity.empty()) app.identity = shortcut_group_key(app.label);
@@ -788,6 +811,85 @@ bool ShortcutEditor::append_app(const std::filesystem::path& path) {
         apps_.push_back(std::move(app));
     }
     return true;
+}
+
+void ShortcutEditor::load_app_image(InstalledApp& app) {
+    app.imageIndex = -1;
+    if (!appImages_) return;
+    SHFILEINFOW info{};
+    if (SHGetFileInfoW(app.path.c_str(), FILE_ATTRIBUTE_NORMAL, &info, sizeof(info),
+                       SHGFI_ICON | SHGFI_SMALLICON)) {
+        app.imageIndex = ImageList_AddIcon(appImages_, info.hIcon);
+        DestroyIcon(info.hIcon);
+    }
+}
+
+bool ShortcutEditor::load_app_cache() {
+    const auto path = app_cache_path();
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(path, ec)) return false;
+
+    std::int64_t countValue = 0;
+    if (!parse_cache_integer(read_cache_value(path, L"cache", L"count", L"-1"), countValue) ||
+        countValue < 0 || countValue > static_cast<std::int64_t>(kMaxApps)) {
+        return false;
+    }
+
+    std::vector<CachedApp> loaded;
+    loaded.reserve(static_cast<std::size_t>(countValue));
+    for (std::int64_t i = 0; i < countValue; ++i) {
+        const std::wstring section = L"app." + std::to_wstring(i);
+        InstalledApp app;
+        app.label = read_cache_value(path, section.c_str(), L"label");
+        app.path = read_cache_value(path, section.c_str(), L"path");
+        app.identity = read_cache_value(path, section.c_str(), L"identity");
+        std::int64_t modified = 0;
+        if (app.label.empty() || app.path.empty() ||
+            !parse_cache_integer(read_cache_value(path, section.c_str(), L"modified", L""), modified)) {
+            return false;
+        }
+        if (app.identity.empty()) app.identity = shortcut_group_key(app.label);
+        loaded.push_back({std::move(app), modified});
+    }
+
+    appCache_ = std::move(loaded);
+    apps_.clear();
+    apps_.reserve(appCache_.size());
+    for (const auto& entry : appCache_) apps_.push_back(entry.app);
+    std::ranges::sort(apps_, [](const InstalledApp& left, const InstalledApp& right) {
+        return _wcsicmp(left.label.c_str(), right.label.c_str()) < 0;
+    });
+    appImageCacheValid_ = false;
+    appCacheReady_ = true;
+    return true;
+}
+
+void ShortcutEditor::save_app_cache() const {
+    const auto path = app_cache_path();
+    std::error_code ec;
+    std::filesystem::create_directories(path.parent_path(), ec);
+
+    std::int64_t previousCount = 0;
+    parse_cache_integer(read_cache_value(path, L"cache", L"count", L"0"), previousCount);
+    previousCount = std::clamp<std::int64_t>(previousCount, 0, static_cast<std::int64_t>(kMaxApps));
+    for (std::int64_t i = 0; i < previousCount; ++i) {
+        const std::wstring section = L"app." + std::to_wstring(i);
+        WritePrivateProfileStringW(section.c_str(), nullptr, nullptr, path.c_str());
+    }
+
+    const auto write = [&](const wchar_t* section, const wchar_t* key, const std::wstring& value) {
+        WritePrivateProfileStringW(section, key, value.c_str(), path.c_str());
+    };
+    write(L"cache", L"version", L"1");
+    write(L"cache", L"count", std::to_wstring(appCache_.size()));
+    for (std::size_t i = 0; i < appCache_.size() && i < kMaxApps; ++i) {
+        const std::wstring section = L"app." + std::to_wstring(i);
+        const auto& entry = appCache_[i];
+        write(section.c_str(), L"label", entry.app.label);
+        write(section.c_str(), L"path", entry.app.path);
+        write(section.c_str(), L"identity", entry.app.identity);
+        write(section.c_str(), L"modified", std::to_wstring(entry.modified));
+    }
 }
 
 void ShortcutEditor::populate_apps() {
@@ -925,6 +1027,7 @@ void ShortcutEditor::destroy_resources() {
         rowHeightImages_ = nullptr;
     }
     for (auto& cached : appCache_) cached.app.imageIndex = -1;
+    for (auto& app : apps_) app.imageIndex = -1;
     if (font_) {
         DeleteObject(font_);
         font_ = nullptr;
@@ -946,7 +1049,7 @@ void ShortcutEditor::destroy_resources() {
         fieldBrush_ = nullptr;
     }
     appImageCacheValid_ = false;
-    appsTab_ = commandsTab_ = search_ = appList_ = appHint_ = nullptr;
+    appsTab_ = commandsTab_ = search_ = refreshAppsButton_ = appList_ = appHint_ = nullptr;
     commandLabelCaption_ = commandLabel_ = commandTargetCaption_ = commandTarget_ = nullptr;
     commandArgumentsCaption_ = commandArguments_ = browseButton_ = addCommandButton_ = nullptr;
     commandList_ = removeCommandButton_ = nullptr;

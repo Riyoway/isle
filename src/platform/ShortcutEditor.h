@@ -43,10 +43,14 @@ private:
     void create_controls();
     void layout_controls();
     void switch_page(bool commands);
+    void refresh_apps();
     void start_app_discovery();
     void load_app_batch();
     void finish_app_discovery();
     bool append_app(const std::filesystem::path& path);
+    bool load_app_cache();
+    void save_app_cache() const;
+    void load_app_image(InstalledApp& app);
     void populate_apps();
     void populate_commands();
     void update_app_check(int item, bool checked);
@@ -77,6 +81,7 @@ private:
     HWND appsTab_{};
     HWND commandsTab_{};
     HWND search_{};
+    HWND refreshAppsButton_{};
     HWND appList_{};
     HWND appHint_{};
     HWND commandLabelCaption_{};
@@ -94,8 +99,6 @@ private:
     std::vector<CachedApp> appCache_;
     std::vector<CachedApp> nextAppCache_;
     std::vector<std::filesystem::path> appRoots_;
-    std::vector<std::pair<std::filesystem::path, std::int64_t>> appDirectoryStamps_;
-    std::vector<std::pair<std::filesystem::path, std::int64_t>> nextDirectoryStamps_;
     std::unique_ptr<std::filesystem::recursive_directory_iterator> appIterator_;
     std::vector<std::wstring> appSeen_;
     std::size_t appRootIndex_{0};
