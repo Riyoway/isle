@@ -131,7 +131,8 @@ std::int64_t file_stamp(const std::filesystem::path& path) {
 
 std::vector<std::filesystem::path> installed_app_roots() {
     std::vector<std::filesystem::path> roots;
-    for (const KNOWNFOLDERID folder : {FOLDERID_Programs, FOLDERID_CommonPrograms}) {
+    for (const KNOWNFOLDERID folder : {FOLDERID_Programs, FOLDERID_CommonPrograms,
+                                       FOLDERID_Desktop, FOLDERID_PublicDesktop}) {
         PWSTR raw = nullptr;
         if (SUCCEEDED(SHGetKnownFolderPath(folder, KF_FLAG_DEFAULT, nullptr, &raw))) {
             roots.emplace_back(raw);
@@ -305,7 +306,7 @@ LRESULT ShortcutEditor::handle_message(UINT message, WPARAM wParam, LPARAM lPara
             return reinterpret_cast<LRESULT>(fieldBrush_);
         case WM_DRAWITEM: {
             const auto* draw = reinterpret_cast<DRAWITEMSTRUCT*>(lParam);
-            if (!draw || draw->CtlType != ODT_BUTTON) return FALSE;
+            if (!draw || (draw->CtlType != ODT_BUTTON && draw->CtlType != ODT_STATIC)) return FALSE;
             const bool tab = draw->CtlID == kAppsTab || draw->CtlID == kCommandsTab;
             const bool selectedTab = (draw->CtlID == kAppsTab && !commandsPage_) ||
                                      (draw->CtlID == kCommandsTab && commandsPage_);
@@ -537,7 +538,9 @@ void ShortcutEditor::create_controls() {
         commandArgumentsCaption_, commandArguments_, addCommandButton_, commandList_, removeCommandButton_};
     for (HWND control : controls) apply_font(control, font_);
     apply_font(appHint_, captionFont_);
-    for (HWND control : controls) apply_dark_theme(control);
+    for (HWND control : {search_, appList_, commandLabel_, commandTarget_, commandArguments_, commandList_}) {
+        apply_dark_theme(control);
+    }
 
     for (HWND list : {appList_, commandList_}) {
         ListView_SetBkColor(list, RGB(0, 0, 0));
@@ -573,7 +576,7 @@ void ShortcutEditor::layout_controls() {
     MoveWindow(appsTab_, pad, px(6.0f), tabsWidth, buttonHeight, TRUE);
     MoveWindow(commandsTab_, pad + tabsWidth + gap, px(6.0f), tabsWidth, buttonHeight, TRUE);
 
-    MoveWindow(search_, pad + px(10.0f), px(50.0f), width - pad * 2 - px(20.0f), px(34.0f), TRUE);
+    MoveWindow(search_, pad + px(10.0f), px(54.0f), width - pad * 2 - px(20.0f), px(30.0f), TRUE);
     MoveWindow(appList_, pad, px(98.0f), width - pad * 2,
                std::max(px(170.0f), height - px(136.0f)), TRUE);
     RECT appClient{};
@@ -688,6 +691,7 @@ void ShortcutEditor::load_app_batch() {
         const bool regular = appIterator_->operator*().is_regular_file(fileError);
         std::error_code directoryError;
         const bool directory = appIterator_->operator*().is_directory(directoryError);
+        if (appRootIndex_ >= 2 && directory) appIterator_->disable_recursion_pending();
         std::error_code iteratorError;
         appIterator_->increment(iteratorError);
         if (iteratorError || *appIterator_ == end) {
