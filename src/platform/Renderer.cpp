@@ -1303,7 +1303,7 @@ void Renderer::draw_waveform(D2D1_RECT_F rect, D2D1_COLOR_F color, float opacity
             : 0.14f + 0.08f * static_cast<float>((i * 7) % 5) / 4.0f;
         const float strength = audioReactive
             ? (meterHasSignal
-                ? std::max(0.12f, audio_bar_strength(audioHistory_[historyIndex], *audioMin, *audioMax))
+                ? std::max(0.16f, audio_bar_strength(audioHistory_[historyIndex], *audioMin, *audioMax))
                 : idleStrength)
             : active
                 ? 0.22f + 0.78f * static_cast<float>(std::abs(std::sin(phase + static_cast<double>(i) * 0.86)))
@@ -1324,7 +1324,8 @@ void Renderer::update_audio_history(bool active) {
     const bool stale = lastAudioSample_.time_since_epoch().count() == 0 ||
                        now - lastAudioSample_ > std::chrono::milliseconds(250);
     lastAudioSample_ = now;
-    const float level = active ? std::min(1.0f, std::pow(audio_peak(), 1.35f) * 1.8f) : 0.0f;
+    // Square-root gain keeps quiet media visible without changing the meter's 0..1 range.
+    const float level = active ? std::min(1.0f, std::sqrt(audio_peak()) * 1.45f) : 0.0f;
     if (stale) {
         audioHistory_.fill(level);
     } else {
