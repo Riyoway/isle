@@ -3,14 +3,88 @@
 #include "../core/Settings.h"
 
 #include <Windows.h>
+#include <commctrl.h>
+#include <commoncontrols.h>
 #include <shellapi.h>
+#include <shlobj.h>
+#include <shobjidl.h>
+#include <wincodec.h>
+#include <wrl/client.h>
 
 #include <array>
+#include <cstdint>
+#include <limits>
+#include <memory>
 #include <string>
+#include <vector>
 
 namespace isle {
 
+using Microsoft::WRL::ComPtr;
+
 namespace {
+std::shared_ptr<const std::vector<std::uint8_t>> shortcut_icon(std::wstring_view path) {
+    HICON icon = nullptr;
+    SHFILEINFOW info{};
+    if (SHGetFileInfoW(std::wstring(path).c_str(), FILE_ATTRIBUTE_NORMAL, &info, sizeof(info),
+                       SHGFI_SYSICONINDEX | SHGFI_LARGEICON)) {
+        ComPtr<IImageList> imageList;
+        if (SUCCEEDED(SHGetImageList(SHIL_JUMBO, IID_IImageList,
+                                     reinterpret_cast<void**>(imageList.GetAddressOf())))) {
+            imageList->GetIcon(info.iIcon, ILD_TRANSPARENT, &icon);
+        }
+    }
+    if (!icon) {
+        SHFILEINFOW large{};
+        if (SHGetFileInfoW(std::wstring(path).c_str(), FILE_ATTRIBUTE_NORMAL, &large, sizeof(large),
+                           SHGFI_ICON | SHGFI_LARGEICON)) {
+            icon = large.hIcon;
+        }
+    }
+    if (!icon) return {};
+
+    ComPtr<IWICImagingFactory> factory;
+    ComPtr<IWICBitmap> bitmap;
+    ComPtr<IWICBitmapEncoder> encoder;
+    ComPtr<IWICBitmapFrameEncode> frame;
+    ComPtr<IStream> output;
+    std::shared_ptr<const std::vector<std::uint8_t>> result;
+    UINT width = 0;
+    UINT height = 0;
+    WICPixelFormatGUID pixelFormat = GUID_WICPixelFormat32bppBGRA;
+    if (SUCCEEDED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+                                    IID_PPV_ARGS(&factory))) &&
+        SUCCEEDED(factory->CreateBitmapFromHICON(icon, &bitmap)) &&
+        SUCCEEDED(bitmap->GetSize(&width, &height)) &&
+        SUCCEEDED(CreateStreamOnHGlobal(nullptr, TRUE, &output)) &&
+        SUCCEEDED(factory->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder)) &&
+        SUCCEEDED(encoder->Initialize(output.Get(), WICBitmapEncoderNoCache)) &&
+        SUCCEEDED(encoder->CreateNewFrame(&frame, nullptr)) &&
+        SUCCEEDED(frame->Initialize(nullptr)) &&
+        SUCCEEDED(frame->SetSize(width, height)) &&
+        SUCCEEDED(frame->SetPixelFormat(&pixelFormat)) &&
+        SUCCEEDED(frame->WriteSource(bitmap.Get(), nullptr)) &&
+        SUCCEEDED(frame->Commit()) &&
+        SUCCEEDED(encoder->Commit())) {
+        STATSTG stat{};
+        LARGE_INTEGER start{};
+        if (SUCCEEDED(output->Stat(&stat, STATFLAG_NONAME)) &&
+            stat.cbSize.QuadPart > 0 &&
+            stat.cbSize.QuadPart <= static_cast<ULONGLONG>(std::numeric_limits<std::uint32_t>::max()) &&
+            SUCCEEDED(output->Seek(start, STREAM_SEEK_SET, nullptr))) {
+            auto bytes = std::make_shared<std::vector<std::uint8_t>>(
+                static_cast<std::size_t>(stat.cbSize.QuadPart));
+            ULONG read = 0;
+            if (SUCCEEDED(output->Read(bytes->data(), static_cast<ULONG>(bytes->size()), &read)) &&
+                read == static_cast<ULONG>(bytes->size())) {
+                result = std::move(bytes);
+            }
+        }
+    }
+    DestroyIcon(icon);
+    return result;
+}
+
 void publish_shortcuts(ActivityStore& store, const std::array<ShortcutSetting, kShortcutSlots>& shortcuts,
                        std::wstring_view source, std::wstring_view idPrefix,
                        std::wstring_view subtitle, std::wstring_view accent, int priority) {
@@ -24,6 +98,7 @@ void publish_shortcuts(ActivityStore& store, const std::array<ShortcutSetting, k
         activity.title = shortcut.label;
         activity.subtitle = std::wstring(subtitle);
         activity.glyph = shortcut.glyph.empty() ? L"\uE8A7" : shortcut.glyph;
+        if (source == L"shortcut.app") activity.artwork = shortcut_icon(shortcut.target);
         activity.accent = std::wstring(accent);
         activity.priority = priority - static_cast<int>(i);
         activity.actions = {{L"launch", L"Open", L"\uE768"}};

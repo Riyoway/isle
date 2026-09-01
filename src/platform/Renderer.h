@@ -106,10 +106,9 @@ private:
     std::unordered_map<std::wstring, Microsoft::WRL::ComPtr<ID2D1SvgDocument>> providerIcons_;
     std::unordered_map<std::wstring, SvgViewport> providerIconViewports_;
     Microsoft::WRL::ComPtr<ID2D1Bitmap1> targetBitmap_;
-    Microsoft::WRL::ComPtr<ID2D1Bitmap1> artworkBitmap_;
+    std::unordered_map<const void*, Microsoft::WRL::ComPtr<ID2D1Bitmap1>> artworkBitmaps_;
     Microsoft::WRL::ComPtr<ID2D1StrokeStyle> roundStrokeStyle_;
     Microsoft::WRL::ComPtr<IWICImagingFactory> wicFactory_;
-    const void* artworkKey_{};
 
     Microsoft::WRL::ComPtr<IDWriteFactory> dwriteFactory_;
     Microsoft::WRL::ComPtr<IDWriteFontCollection1> fontCollection_;

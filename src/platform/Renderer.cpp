@@ -246,6 +246,8 @@ void Renderer::initialize(HWND hwnd, UINT widthPx, UINT heightPx) {
 }
 
 void Renderer::create_device_resources() {
+    artworkBitmaps_.clear();
+
     UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
 #if defined(_DEBUG)
     flags |= D3D11_CREATE_DEVICE_DEBUG;
@@ -881,8 +883,13 @@ void Renderer::draw_shortcut_widget(const RenderState& state, const std::vector<
         } else {
             fill_round_rect(button, radius, accent, (press > 0.01f ? 0.78f : 0.22f) * opacity);
         }
-        iconFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
-        draw_text(shortcuts[i]->glyph, iconFormat_.Get(), button, accent, opacity);
+        if (!commands && shortcuts[i]->artwork) {
+            draw_artwork(*shortcuts[i], inset_rect(button, 6.0f * s),
+                         std::min(12.0f * s, size * 0.28f), opacity);
+        } else {
+            iconFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+            draw_text(shortcuts[i]->glyph, iconFormat_.Get(), button, accent, opacity);
+        }
         smallFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
         draw_text(shortcuts[i]->title, smallFormat_.Get(),
                   D2D1::RectF(centerX - cellWidth * 0.47f, rect.bottom - 28.0f * s,
@@ -1227,19 +1234,20 @@ void Renderer::draw_metric(const Activity& activity, D2D1_POINT_2F center, float
 }
 
 ID2D1Bitmap1* Renderer::artwork_bitmap(const Activity& activity) {
-    const void* key = activity.artwork.get();
-    if (key == artworkKey_) return artworkBitmap_.Get();
-    artworkKey_ = key;
-    artworkBitmap_.Reset();
     if (!activity.artwork || activity.artwork->empty() ||
         activity.artwork->size() > static_cast<std::size_t>(std::numeric_limits<DWORD>::max())) {
         return nullptr;
+    }
+    const void* key = activity.artwork.get();
+    if (const auto cached = artworkBitmaps_.find(key); cached != artworkBitmaps_.end()) {
+        return cached->second.Get();
     }
 
     ComPtr<IWICStream> stream;
     ComPtr<IWICBitmapDecoder> decoder;
     ComPtr<IWICBitmapFrameDecode> frame;
     ComPtr<IWICFormatConverter> converter;
+    ComPtr<ID2D1Bitmap1> bitmap;
     if (FAILED(wicFactory_->CreateStream(&stream)) ||
         FAILED(stream->InitializeFromMemory(const_cast<BYTE*>(activity.artwork->data()),
                                             static_cast<DWORD>(activity.artwork->size()))) ||
@@ -1248,10 +1256,12 @@ ID2D1Bitmap1* Renderer::artwork_bitmap(const Activity& activity) {
         FAILED(wicFactory_->CreateFormatConverter(&converter)) ||
         FAILED(converter->Initialize(frame.Get(), GUID_WICPixelFormat32bppPBGRA,
                                      WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom)) ||
-        FAILED(d2dContext_->CreateBitmapFromWicBitmap(converter.Get(), nullptr, &artworkBitmap_))) {
-        artworkBitmap_.Reset();
+        FAILED(d2dContext_->CreateBitmapFromWicBitmap(converter.Get(), nullptr, &bitmap))) {
+        return nullptr;
     }
-    return artworkBitmap_.Get();
+    if (artworkBitmaps_.size() >= 16) artworkBitmaps_.clear();
+    auto [entry, inserted] = artworkBitmaps_.try_emplace(key, std::move(bitmap));
+    return inserted ? entry->second.Get() : nullptr;
 }
 
 void Renderer::draw_artwork(const Activity& activity, D2D1_RECT_F rect, float radius, float opacity) {
