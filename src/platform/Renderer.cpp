@@ -1324,8 +1324,8 @@ void Renderer::update_audio_history(bool active) {
     const bool stale = lastAudioSample_.time_since_epoch().count() == 0 ||
                        now - lastAudioSample_ > std::chrono::milliseconds(250);
     lastAudioSample_ = now;
-    // Square-root gain keeps quiet media visible without changing the meter's 0..1 range.
-    const float level = active ? std::min(1.0f, std::sqrt(audio_peak()) * 1.45f) : 0.0f;
+    // Keep the high end unsaturated; min/max normalization below restores quiet contrast.
+    const float level = active ? std::sqrt(audio_peak()) : 0.0f;
     if (stale) {
         audioHistory_.fill(level);
     } else {
