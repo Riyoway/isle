@@ -669,6 +669,11 @@ void OverlayWindow::apply_settings_to_render_state() {
     renderState_.showAppLauncher = settings_.showAppLauncher;
     renderState_.showCommandShortcuts = settings_.showCommandShortcuts;
     renderState_.showMusicPlayer = settings_.showMusicPlayer;
+    const auto shortcut_enabled = [](const ShortcutSetting& shortcut) {
+        return shortcut.enabled && !shortcut.label.empty() && !shortcut.target.empty();
+    };
+    renderState_.appShortcutCount = static_cast<int>(std::ranges::count_if(settings_.appShortcuts, shortcut_enabled));
+    renderState_.commandShortcutCount = static_cast<int>(std::ranges::count_if(settings_.commandShortcuts, shortcut_enabled));
     renderState_.monitorAtCursor = settings_.monitorAtCursor;
     renderState_.islandSizePreset = settings_.islandSizePreset;
     renderState_.islandShape = settings_.islandShape;
@@ -907,24 +912,22 @@ int OverlayWindow::hit_test_setting_control(float x, float y) const {
 int OverlayWindow::hit_test_shortcut(float x, float y) const {
     if (!expanded_ || settingsMode_) return -1;
     const auto activities = store_.snapshot();
-    const float s = renderState_.dpiScale;
     for (const int widget : {static_cast<int>(WidgetKind::AppLauncher), static_cast<int>(WidgetKind::Commands)}) {
         if (!widget_enabled(renderState_, widget)) continue;
-        const auto card = renderer_.widget_rect(renderState_, widget);
-        const float cardWidth = card.right - card.left;
         const std::wstring_view source = widget == static_cast<int>(WidgetKind::Commands)
             ? L"shortcut.command" : L"shortcut.app";
-        const int itemCount = static_cast<int>(std::ranges::count_if(activities, [&](const Activity& activity) {
+        const int configuredCount = widget == static_cast<int>(WidgetKind::Commands)
+            ? renderState_.commandShortcutCount : renderState_.appShortcutCount;
+        const int activityCount = static_cast<int>(std::ranges::count_if(activities, [&](const Activity& activity) {
             return activity.source == source;
         }));
+        const int itemCount = std::min({static_cast<int>(kShortcutSlots), configuredCount, activityCount});
         if (itemCount <= 0) continue;
         int item = 0;
         for (const auto& activity : activities) {
             if (activity.source != source || item >= static_cast<int>(kShortcutSlots)) continue;
-            const float cellWidth = cardWidth / static_cast<float>(itemCount);
-            const float centerX = card.left + cellWidth * (static_cast<float>(item) + 0.5f);
-            if (point_in_rect(x, y, D2D1::RectF(centerX - cellWidth * 0.46f, card.top + 29.0f * s,
-                                                centerX + cellWidth * 0.46f, card.bottom - 3.0f * s))) {
+            const auto cell = renderer_.shortcut_item_rect(renderState_, widget, item, itemCount);
+            if (point_in_rect(x, y, cell)) {
                 return kControlShortcutBase +
                        (widget == static_cast<int>(WidgetKind::Commands) ? static_cast<int>(kShortcutSlots) : 0) + item;
             }

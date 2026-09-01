@@ -81,6 +81,8 @@ struct RenderState {
     bool showAppLauncher{true};
     bool showCommandShortcuts{true};
     bool showMusicPlayer{true};
+    int appShortcutCount{0};
+    int commandShortcutCount{0};
     bool monitorAtCursor{false};
     int settingsPage{0};
     int islandSizePreset{1};

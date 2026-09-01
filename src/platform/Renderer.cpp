@@ -120,10 +120,24 @@ int ai_row_count(const RenderState& state) noexcept {
     return std::clamp(state.aiVisibleCount, 1, state.showSystemMetrics ? 3 : 4);
 }
 
+int shortcut_count(const RenderState& state, int widget) noexcept {
+    const int count = widget == static_cast<int>(WidgetKind::Commands)
+        ? state.commandShortcutCount : state.appShortcutCount;
+    return std::clamp(count, 0, static_cast<int>(kShortcutSlots));
+}
+
+int shortcut_row_count(const RenderState& state, int widget) noexcept {
+    return std::max(1, (shortcut_count(state, widget) + 2) / 3);
+}
+
 float widget_height(const RenderState& state, int widget) noexcept {
     if (widget == static_cast<int>(WidgetKind::Music)) return 220.0f;
     if (widget == static_cast<int>(WidgetKind::AiUsage)) {
         return 36.0f + 56.0f * static_cast<float>(ai_row_count(state));
+    }
+    if (widget == static_cast<int>(WidgetKind::AppLauncher) ||
+        widget == static_cast<int>(WidgetKind::Commands)) {
+        return 48.0f + 70.0f * static_cast<float>(shortcut_row_count(state, widget));
     }
     return 118.0f;
 }
@@ -435,13 +449,15 @@ D2D1_RECT_F Renderer::widget_rect(const RenderState& state, int wanted) const no
     const float halfWidth = (island.right - island.left - pad * 2.0f - gap) * 0.5f;
     float y = island.top + 46.0f * s;
     bool halfPending = false;
+    float halfHeight = 0.0f;
     for (const int widget : state.widgetOrder) {
         if (!widget_enabled(state, widget)) continue;
         const float height = widget_height(state, widget) * s;
         if (full_width_widget(widget)) {
             if (halfPending) {
-                y += 118.0f * s + gap;
+                y += halfHeight + gap;
                 halfPending = false;
+                halfHeight = 0.0f;
             }
             const auto result = D2D1::RectF(island.left + pad, y, island.right - pad, y + height);
             if (widget == wanted) return result;
@@ -451,15 +467,32 @@ D2D1_RECT_F Renderer::widget_rect(const RenderState& state, int wanted) const no
                                             island.left + pad + halfWidth, y + height);
             if (widget == wanted) return result;
             halfPending = true;
+            halfHeight = height;
         } else {
             const auto result = D2D1::RectF(island.left + pad + halfWidth + gap, y,
                                             island.right - pad, y + height);
             if (widget == wanted) return result;
-            y += 118.0f * s + gap;
+            y += std::max(halfHeight, height) + gap;
             halfPending = false;
+            halfHeight = 0.0f;
         }
     }
     return D2D1::RectF();
+}
+
+D2D1_RECT_F Renderer::shortcut_item_rect(const RenderState& state, int widget,
+                                          int item, int count) const noexcept {
+    const int visibleCount = std::clamp(count, 0, static_cast<int>(kShortcutSlots));
+    if (item < 0 || item >= visibleCount) return D2D1::RectF();
+    const auto card = widget_rect(state, widget);
+    const float s = state.dpiScale;
+    const int row = item / 3;
+    const int rowStart = row * 3;
+    const int columns = std::min(3, visibleCount - rowStart);
+    const float cellWidth = (card.right - card.left) / static_cast<float>(columns);
+    const float left = card.left + cellWidth * static_cast<float>(item - rowStart);
+    const float top = card.top + (34.0f + 70.0f * static_cast<float>(row)) * s;
+    return D2D1::RectF(left, top, left + cellWidth, std::min(card.bottom, top + 70.0f * s));
 }
 
 float Renderer::expanded_height(const RenderState& state) const noexcept {
@@ -865,17 +898,17 @@ void Renderer::draw_shortcut_widget(const RenderState& state, const std::vector<
     for (const auto& activity : activities) {
         if (activity.source == source && count < shortcuts.size()) shortcuts[count++] = &activity;
     }
+    count = std::min(count, static_cast<std::size_t>(shortcut_count(state, widget)));
     constexpr int controlBase = 40;
     const int sourceOffset = commands ? static_cast<int>(kShortcutSlots) : 0;
-    const float cellWidth = (rect.right - rect.left) /
-                            static_cast<float>(std::max<std::size_t>(1, count));
     for (std::size_t i = 0; i < count; ++i) {
-        const float centerX = rect.left + cellWidth * (static_cast<float>(i) + 0.5f);
+        const auto cell = shortcut_item_rect(state, widget, static_cast<int>(i), static_cast<int>(count));
+        const float centerX = (cell.left + cell.right) * 0.5f;
         const float press = state.pressedControl == controlBase + sourceOffset + static_cast<int>(i)
                                 ? state.pressAmount : 0.0f;
         const float size = (46.0f - press * 3.0f) * s;
-        const auto button = D2D1::RectF(centerX - size * 0.5f, rect.top + 34.0f * s + press * 1.5f * s,
-                                        centerX + size * 0.5f, rect.top + 34.0f * s + press * 1.5f * s + size);
+        const auto button = D2D1::RectF(centerX - size * 0.5f, cell.top + press * 1.5f * s,
+                                        centerX + size * 0.5f, cell.top + press * 1.5f * s + size);
         const float radius = state.buttonStyle == 1 ? 13.0f * s : size * 0.5f;
         if (state.buttonStyle == 2) {
             fill_round_rect(button, radius, accent, 0.08f * opacity);
@@ -892,8 +925,8 @@ void Renderer::draw_shortcut_widget(const RenderState& state, const std::vector<
         }
         smallFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
         draw_text(shortcuts[i]->title, smallFormat_.Get(),
-                  D2D1::RectF(centerX - cellWidth * 0.47f, rect.bottom - 28.0f * s,
-                              centerX + cellWidth * 0.47f, rect.bottom - 5.0f * s),
+                  D2D1::RectF(cell.left + 3.0f * s, cell.bottom - 24.0f * s,
+                              cell.right - 3.0f * s, cell.bottom - 3.0f * s),
                   D2D1::ColorF(0xD1D1D6), opacity);
     }
 }

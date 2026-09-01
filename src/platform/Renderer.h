@@ -39,6 +39,8 @@ public:
 
     [[nodiscard]] D2D1_RECT_F island_rect(const RenderState& state) const noexcept;
     [[nodiscard]] D2D1_RECT_F widget_rect(const RenderState& state, int widget) const noexcept;
+    [[nodiscard]] D2D1_RECT_F shortcut_item_rect(const RenderState& state, int widget,
+                                                  int item, int count) const noexcept;
     [[nodiscard]] float expanded_height(const RenderState& state) const noexcept;
     [[nodiscard]] UINT width() const noexcept { return width_; }
     [[nodiscard]] UINT height() const noexcept { return height_; }

@@ -82,11 +82,14 @@ void load_shortcut(ShortcutSetting& shortcut, const wchar_t* section, const std:
     }
     shortcut.enabled = parse_bool(read_ini(section, L"enabled", shortcut.enabled ? L"1" : L"0", path), shortcut.enabled);
 }
+
+bool is_default_app_shortcut(const ShortcutSetting& shortcut, const wchar_t* label,
+                             const wchar_t* target) noexcept {
+    return shortcut.enabled && shortcut.label == label && shortcut.target == target;
+}
 } // namespace
 
 Settings::Settings() {
-    appShortcuts[0] = {L"Files", L"explorer.exe", L"", L"\uE8B7", true};
-    appShortcuts[1] = {L"Terminal", L"wt.exe", L"", L"\uE756", true};
     commandShortcuts[0] = {L"Task Manager", L"taskmgr.exe", L"", L"\uE9D9", true};
     commandShortcuts[1] = {L"Settings", L"ms-settings:", L"", L"\uE713", true};
     aiRings.fill(true);
@@ -152,6 +155,22 @@ Settings Settings::load() {
         const std::wstring commandSection = L"command." + std::to_wstring(i);
         load_shortcut(s.appShortcuts[i], appSection.c_str(), path);
         load_shortcut(s.commandShortcuts[i], commandSection.c_str(), path);
+    }
+    if (!parse_bool(read_ini(L"shortcuts", L"appDefaultsRemoved", L"0", path), false)) {
+        const auto clear_default = [&](std::size_t index, const wchar_t* label, const wchar_t* target) {
+            if (!is_default_app_shortcut(s.appShortcuts[index], label, target)) return;
+            s.appShortcuts[index] = {};
+            const std::wstring section = L"app." + std::to_wstring(index);
+            for (const wchar_t* key : {L"label", L"target", L"arguments"}) {
+                WritePrivateProfileStringW(section.c_str(), key, L"", path.c_str());
+            }
+            WritePrivateProfileStringW(section.c_str(), L"glyph", nullptr, path.c_str());
+            WritePrivateProfileStringW(section.c_str(), L"glyphCode", nullptr, path.c_str());
+            WritePrivateProfileStringW(section.c_str(), L"enabled", L"0", path.c_str());
+        };
+        clear_default(0, L"Files", L"explorer.exe");
+        clear_default(1, L"Terminal", L"wt.exe");
+        WritePrivateProfileStringW(L"shortcuts", L"appDefaultsRemoved", L"1", path.c_str());
     }
     return s;
 }
