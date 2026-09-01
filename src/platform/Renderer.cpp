@@ -1035,7 +1035,7 @@ void Renderer::draw_settings(const RenderState& state, const D2D1_RECT_F& rect) 
         drawRow(4, L"Monitor at cursor", L"Move Isle to the active display", 64, state.monitorAtCursor,
                  nullptr, false);
     } else if (state.settingsPage == 5) {
-        // The native shortcut editor is embedded below this header.
+        // The native shortcut editor popup continues below this header.
     } else {
         const int provider = std::clamp(state.selectedAiProvider, 0, static_cast<int>(kAIProviders.size() - 1));
         const std::wstring selected = std::to_wstring(state.aiVisibleCount) + L" selected · choose several";

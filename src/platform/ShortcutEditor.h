@@ -47,7 +47,6 @@ private:
     bool append_app(const std::filesystem::path& path);
     void populate_apps();
     void populate_commands();
-    void add_selected_app();
     void update_app_check(int item, bool checked);
     void add_command();
     void remove_command();
@@ -66,16 +65,18 @@ private:
     std::function<void()> changed_;
 
     HFONT font_{};
+    HFONT titleFont_{};
+    HFONT captionFont_{};
     HBRUSH backgroundBrush_{};
     HBRUSH fieldBrush_{};
     HIMAGELIST appImages_{};
+    HIMAGELIST rowHeightImages_{};
 
     HWND appsTab_{};
     HWND commandsTab_{};
     HWND search_{};
     HWND appList_{};
     HWND appHint_{};
-    HWND addAppButton_{};
     HWND commandLabelCaption_{};
     HWND commandLabel_{};
     HWND commandTargetCaption_{};
@@ -97,7 +98,6 @@ private:
     bool appLoading_{false};
     bool appImageCacheValid_{false};
     bool commandsPage_{false};
-    bool refreshing_{false};
     RECT embeddedBounds_{};
     int embeddedRadius_{0};
 };

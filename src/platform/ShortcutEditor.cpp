@@ -25,7 +25,6 @@ constexpr int kAppsTab = 1001;
 constexpr int kCommandsTab = 1002;
 constexpr int kAppSearch = 1101;
 constexpr int kAppList = 1102;
-constexpr int kAddApp = 1103;
 constexpr int kCommandLabel = 1201;
 constexpr int kCommandTarget = 1202;
 constexpr int kCommandArguments = 1203;
@@ -86,6 +85,41 @@ void apply_dark_theme(HWND control) {
 RECT screen_bounds(HWND owner, RECT bounds) {
     if (owner) MapWindowPoints(owner, nullptr, reinterpret_cast<POINT*>(&bounds), 2);
     return bounds;
+}
+
+void fill_rounded(HDC dc, const RECT& rect, int radius, COLORREF color) {
+    HBRUSH brush = CreateSolidBrush(color);
+    const HGDIOBJ oldBrush = SelectObject(dc, brush);
+    const HGDIOBJ oldPen = SelectObject(dc, GetStockObject(NULL_PEN));
+    RoundRect(dc, rect.left, rect.top, rect.right, rect.bottom, radius, radius);
+    SelectObject(dc, oldPen);
+    SelectObject(dc, oldBrush);
+    DeleteObject(brush);
+}
+
+void stroke_rounded(HDC dc, const RECT& rect, int radius, COLORREF color) {
+    HPEN pen = CreatePen(PS_SOLID, 1, color);
+    const HGDIOBJ oldPen = SelectObject(dc, pen);
+    const HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(HOLLOW_BRUSH));
+    RoundRect(dc, rect.left, rect.top, rect.right, rect.bottom, radius, radius);
+    SelectObject(dc, oldBrush);
+    SelectObject(dc, oldPen);
+    DeleteObject(pen);
+}
+
+void draw_toggle(HDC dc, RECT rect, bool enabled) {
+    fill_rounded(dc, rect, rect.bottom - rect.top,
+                 enabled ? RGB(52, 199, 89) : RGB(58, 58, 60));
+    const int inset = 3;
+    const int diameter = rect.bottom - rect.top - inset * 2;
+    const int left = enabled ? rect.right - inset - diameter : rect.left + inset;
+    HBRUSH knob = CreateSolidBrush(RGB(255, 255, 255));
+    const HGDIOBJ oldBrush = SelectObject(dc, knob);
+    const HGDIOBJ oldPen = SelectObject(dc, GetStockObject(NULL_PEN));
+    Ellipse(dc, left, rect.top + inset, left + diameter, rect.top + inset + diameter);
+    SelectObject(dc, oldPen);
+    SelectObject(dc, oldBrush);
+    DeleteObject(knob);
 }
 
 std::int64_t file_stamp(const std::filesystem::path& path) {
@@ -213,6 +247,22 @@ LRESULT ShortcutEditor::handle_message(UINT message, WPARAM wParam, LPARAM lPara
             PAINTSTRUCT paint{};
             const HDC dc = BeginPaint(hwnd_, &paint);
             FillRect(dc, &paint.rcPaint, backgroundBrush_);
+            const UINT dpi = GetDpiForWindow(hwnd_);
+            const int radius = MulDiv(14, dpi == 0 ? 96 : static_cast<int>(dpi), 96);
+            const auto drawField = [&](HWND control) {
+                if (!control || !IsWindowVisible(control)) return;
+                RECT field{};
+                GetWindowRect(control, &field);
+                MapWindowPoints(nullptr, hwnd_, reinterpret_cast<POINT*>(&field), 2);
+                InflateRect(&field, MulDiv(10, dpi == 0 ? 96 : static_cast<int>(dpi), 96),
+                            MulDiv(5, dpi == 0 ? 96 : static_cast<int>(dpi), 96));
+                fill_rounded(dc, field, radius, RGB(17, 17, 19));
+                stroke_rounded(dc, field, radius, RGB(29, 29, 32));
+            };
+            drawField(search_);
+            drawField(commandLabel_);
+            drawField(commandTarget_);
+            drawField(commandArguments_);
             EndPaint(hwnd_, &paint);
             return 0;
         }
@@ -225,12 +275,13 @@ LRESULT ShortcutEditor::handle_message(UINT message, WPARAM wParam, LPARAM lPara
         case WM_ERASEBKGND:
             return 1;
         case WM_CTLCOLORSTATIC:
-            SetTextColor(reinterpret_cast<HDC>(wParam), RGB(224, 224, 230));
+            SetTextColor(reinterpret_cast<HDC>(wParam), reinterpret_cast<HWND>(lParam) == appHint_
+                ? RGB(113, 113, 122) : RGB(224, 224, 230));
             SetBkColor(reinterpret_cast<HDC>(wParam), RGB(0, 0, 0));
             return reinterpret_cast<LRESULT>(backgroundBrush_);
         case WM_CTLCOLOREDIT:
             SetTextColor(reinterpret_cast<HDC>(wParam), RGB(244, 244, 245));
-            SetBkColor(reinterpret_cast<HDC>(wParam), RGB(31, 31, 35));
+            SetBkColor(reinterpret_cast<HDC>(wParam), RGB(17, 17, 19));
             return reinterpret_cast<LRESULT>(fieldBrush_);
         case WM_DRAWITEM: {
             const auto* draw = reinterpret_cast<DRAWITEMSTRUCT*>(lParam);
@@ -238,22 +289,15 @@ LRESULT ShortcutEditor::handle_message(UINT message, WPARAM wParam, LPARAM lPara
             const bool tab = draw->CtlID == kAppsTab || draw->CtlID == kCommandsTab;
             const bool selectedTab = (draw->CtlID == kAppsTab && !commandsPage_) ||
                                      (draw->CtlID == kCommandsTab && commandsPage_);
-            const bool primary = draw->CtlID == kAddApp || draw->CtlID == kAddCommand;
+            const bool primary = draw->CtlID == kAddCommand;
             const bool pressed = (draw->itemState & ODS_SELECTED) != 0;
             const COLORREF fill = primary ? (pressed ? RGB(210, 210, 214) : RGB(245, 245, 247)) :
                                   selectedTab ? (pressed ? RGB(72, 72, 74) : RGB(58, 58, 60)) :
                                   pressed ? RGB(50, 50, 54) : RGB(28, 28, 30);
-            const COLORREF stroke = tab ? RGB(72, 72, 74) : RGB(58, 58, 60);
-            HBRUSH brush = CreateSolidBrush(fill);
-            HPEN pen = CreatePen(PS_SOLID, 1, stroke);
-            const HGDIOBJ oldBrush = SelectObject(draw->hDC, brush);
-            const HGDIOBJ oldPen = SelectObject(draw->hDC, pen);
-            RoundRect(draw->hDC, draw->rcItem.left, draw->rcItem.top,
-                      draw->rcItem.right, draw->rcItem.bottom, 16, 16);
-            SelectObject(draw->hDC, oldBrush);
-            SelectObject(draw->hDC, oldPen);
-            DeleteObject(brush);
-            DeleteObject(pen);
+            FillRect(draw->hDC, &draw->rcItem, backgroundBrush_);
+            const UINT dpi = GetDpiForWindow(hwnd_);
+            fill_rounded(draw->hDC, draw->rcItem,
+                         MulDiv(tab ? 18 : 16, dpi == 0 ? 96 : static_cast<int>(dpi), 96), fill);
 
             std::array<wchar_t, 96> label{};
             GetWindowTextW(draw->hwndItem, label.data(), static_cast<int>(label.size()));
@@ -272,7 +316,6 @@ LRESULT ShortcutEditor::handle_message(UINT message, WPARAM wParam, LPARAM lPara
             if (id == kAppsTab && notification == BN_CLICKED) switch_page(false);
             else if (id == kCommandsTab && notification == BN_CLICKED) switch_page(true);
             else if (id == kAppSearch && notification == EN_CHANGE) populate_apps();
-            else if (id == kAddApp && notification == BN_CLICKED) add_selected_app();
             else if (id == kBrowseTarget && notification == BN_CLICKED) browse_target();
             else if (id == kAddCommand && notification == BN_CLICKED) add_command();
             else if (id == kRemoveCommand && notification == BN_CLICKED) remove_command();
@@ -281,11 +324,34 @@ LRESULT ShortcutEditor::handle_message(UINT message, WPARAM wParam, LPARAM lPara
         case WM_NOTIFY: {
             const auto* header = reinterpret_cast<NMHDR*>(lParam);
             if (!header) return 0;
-            if (header->code == LVN_ITEMCHANGED && header->hwndFrom == appList_) {
-                const auto* change = reinterpret_cast<NMLISTVIEW*>(lParam);
-                if ((change->uChanged & LVIF_STATE) != 0 &&
-                    ((change->uOldState ^ change->uNewState) & LVIS_STATEIMAGEMASK) != 0) {
-                    update_app_check(change->iItem, ListView_GetCheckState(appList_, change->iItem) != FALSE);
+            if (header->code == NM_CLICK && header->hwndFrom == appList_) {
+                const auto* click = reinterpret_cast<NMITEMACTIVATE*>(lParam);
+                if (click->iItem >= 0) {
+                    const int index = item_data(appList_, click->iItem);
+                    if (index >= 0 && index < static_cast<int>(apps_.size())) {
+                        const auto& app = apps_[static_cast<std::size_t>(index)];
+                        const bool enabled = std::ranges::any_of(settings_.appShortcuts, [&](const ShortcutSetting& shortcut) {
+                            return shortcut.enabled && same_path(shortcut.target, app.path);
+                        });
+                        update_app_check(click->iItem, !enabled);
+                        InvalidateRect(appList_, nullptr, FALSE);
+                    }
+                }
+            } else if (header->code == LVN_KEYDOWN && header->hwndFrom == appList_) {
+                const auto* key = reinterpret_cast<NMLVKEYDOWN*>(lParam);
+                if (key->wVKey == VK_SPACE || key->wVKey == VK_RETURN) {
+                    const int item = ListView_GetNextItem(appList_, -1, LVNI_SELECTED);
+                    if (item >= 0) {
+                        const int index = item_data(appList_, item);
+                        if (index >= 0 && index < static_cast<int>(apps_.size())) {
+                            const auto& app = apps_[static_cast<std::size_t>(index)];
+                            const bool enabled = std::ranges::any_of(settings_.appShortcuts, [&](const ShortcutSetting& shortcut) {
+                                return shortcut.enabled && same_path(shortcut.target, app.path);
+                            });
+                            update_app_check(item, !enabled);
+                            InvalidateRect(appList_, nullptr, FALSE);
+                        }
+                    }
                 }
             } else if (header->code == LVN_ITEMCHANGED && header->hwndFrom == commandList_) {
                 const auto* change = reinterpret_cast<NMLISTVIEW*>(lParam);
@@ -298,10 +364,63 @@ LRESULT ShortcutEditor::handle_message(UINT message, WPARAM wParam, LPARAM lPara
                 auto* draw = reinterpret_cast<NMLVCUSTOMDRAW*>(lParam);
                 if (draw->nmcd.dwDrawStage == CDDS_PREPAINT) return CDRF_NOTIFYITEMDRAW;
                 if (draw->nmcd.dwDrawStage == (CDDS_ITEMPREPAINT)) {
-                    draw->clrText = RGB(238, 238, 242);
-                    draw->clrTextBk = (draw->nmcd.uItemState & CDIS_SELECTED) != 0
-                        ? RGB(58, 58, 60) : RGB(17, 17, 19);
-                    return CDRF_NEWFONT;
+                    const UINT dpi = GetDpiForWindow(hwnd_);
+                    const float scale = dpi == 0 ? 1.0f : static_cast<float>(dpi) / 96.0f;
+                    const auto px = [scale](float value) { return static_cast<int>(std::lround(value * scale)); };
+                    RECT row = draw->nmcd.rc;
+                    FillRect(draw->nmcd.hdc, &row, backgroundBrush_);
+                    RECT card{row.left + px(4.0f), row.top + px(4.0f),
+                              row.right - px(4.0f), row.bottom - px(4.0f)};
+                    const bool selected = (draw->nmcd.uItemState & CDIS_SELECTED) != 0;
+                    fill_rounded(draw->nmcd.hdc, card, px(18.0f),
+                                 selected ? RGB(28, 28, 30) : RGB(17, 17, 19));
+                    stroke_rounded(draw->nmcd.hdc, card, px(18.0f), RGB(29, 29, 32));
+                    SetBkMode(draw->nmcd.hdc, TRANSPARENT);
+
+                    const int item = static_cast<int>(draw->nmcd.dwItemSpec);
+                    const int index = item_data(header->hwndFrom, item);
+                    if (header->hwndFrom == appList_ && index >= 0 && index < static_cast<int>(apps_.size())) {
+                        const auto& app = apps_[static_cast<std::size_t>(index)];
+                        const int iconSize = px(32.0f);
+                        const int iconX = card.left + px(14.0f);
+                        const int iconY = card.top + (card.bottom - card.top - iconSize) / 2;
+                        if (appImages_ && app.imageIndex >= 0) {
+                            ImageList_Draw(appImages_, app.imageIndex, draw->nmcd.hdc, iconX, iconY, ILD_TRANSPARENT);
+                        }
+                        const int textLeft = card.left + px(58.0f);
+                        RECT title{textLeft, card.top + px(7.0f), card.right - px(66.0f), card.top + px(31.0f)};
+                        RECT caption{textLeft, card.top + px(30.0f), card.right - px(66.0f), card.bottom - px(5.0f)};
+                        const HGDIOBJ oldFont = SelectObject(draw->nmcd.hdc, titleFont_);
+                        SetTextColor(draw->nmcd.hdc, RGB(244, 244, 245));
+                        DrawTextW(draw->nmcd.hdc, app.label.c_str(), -1, &title,
+                                  DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+                        SelectObject(draw->nmcd.hdc, captionFont_);
+                        SetTextColor(draw->nmcd.hdc, RGB(113, 113, 122));
+                        DrawTextW(draw->nmcd.hdc, app.path.c_str(), -1, &caption,
+                                  DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+                        SelectObject(draw->nmcd.hdc, oldFont);
+                        const bool enabled = std::ranges::any_of(settings_.appShortcuts, [&](const ShortcutSetting& shortcut) {
+                            return shortcut.enabled && same_path(shortcut.target, app.path);
+                        });
+                        RECT toggle{card.right - px(52.0f), card.top + px(18.0f),
+                                    card.right - px(12.0f), card.top + px(42.0f)};
+                        draw_toggle(draw->nmcd.hdc, toggle, enabled);
+                    } else if (header->hwndFrom == commandList_ && index >= 0 &&
+                               index < static_cast<int>(settings_.commandShortcuts.size())) {
+                        const auto& command = settings_.commandShortcuts[static_cast<std::size_t>(index)];
+                        RECT title{card.left + px(15.0f), card.top + px(7.0f), card.right - px(15.0f), card.top + px(31.0f)};
+                        RECT caption{card.left + px(15.0f), card.top + px(30.0f), card.right - px(15.0f), card.bottom - px(5.0f)};
+                        const HGDIOBJ oldFont = SelectObject(draw->nmcd.hdc, titleFont_);
+                        SetTextColor(draw->nmcd.hdc, RGB(244, 244, 245));
+                        DrawTextW(draw->nmcd.hdc, command.label.c_str(), -1, &title,
+                                  DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+                        SelectObject(draw->nmcd.hdc, captionFont_);
+                        SetTextColor(draw->nmcd.hdc, RGB(113, 113, 122));
+                        DrawTextW(draw->nmcd.hdc, command.target.c_str(), -1, &caption,
+                                  DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+                        SelectObject(draw->nmcd.hdc, oldFont);
+                    }
+                    return CDRF_SKIPDEFAULT;
                 }
             }
             return 0;
@@ -323,10 +442,19 @@ LRESULT ShortcutEditor::handle_message(UINT message, WPARAM wParam, LPARAM lPara
 
 void ShortcutEditor::create_controls() {
     backgroundBrush_ = CreateSolidBrush(RGB(0, 0, 0));
-    fieldBrush_ = CreateSolidBrush(RGB(31, 31, 35));
-    font_ = CreateFontW(-15, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+    fieldBrush_ = CreateSolidBrush(RGB(17, 17, 19));
+    const UINT dpi = GetDpiForWindow(hwnd_);
+    const int fontHeight = -MulDiv(11, dpi == 0 ? 96 : static_cast<int>(dpi), 72);
+    const int captionHeight = -MulDiv(9, dpi == 0 ? 96 : static_cast<int>(dpi), 72);
+    font_ = CreateFontW(fontHeight, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                         OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                         DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI Variable Text");
+    titleFont_ = CreateFontW(fontHeight, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                             OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                             DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI Variable Text");
+    captionFont_ = CreateFontW(captionHeight, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                               OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                               DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI Variable Text");
     appsTab_ = CreateWindowExW(0, WC_BUTTONW, L"Apps", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | WS_TABSTOP,
                                0, 0, 1, 1, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kAppsTab)), instance_, nullptr);
     commandsTab_ = CreateWindowExW(0, WC_BUTTONW, L"Commands", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | WS_TABSTOP,
@@ -339,18 +467,14 @@ void ShortcutEditor::create_controls() {
                                WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_NOCOLUMNHEADER |
                                LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_TABSTOP,
                                0, 0, 1, 1, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kAppList)), instance_, nullptr);
-    ListView_SetExtendedListViewStyle(appList_, LVS_EX_FULLROWSELECT | LVS_EX_CHECKBOXES | LVS_EX_DOUBLEBUFFER);
+    ListView_SetExtendedListViewStyle(appList_, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
     LVCOLUMNW column{LVCF_TEXT | LVCF_WIDTH};
     column.pszText = const_cast<LPWSTR>(L"Installed applications");
     column.cx = 320;
     ListView_InsertColumn(appList_, 0, &column);
     appHint_ = CreateWindowExW(0, WC_STATICW,
-                               L"Check an app to show it.",
+                               L"Select apps to show in the Apps widget.",
                                WS_CHILD | WS_VISIBLE, 0, 0, 1, 1, hwnd_, nullptr, instance_, nullptr);
-    addAppButton_ = CreateWindowExW(0, WC_BUTTONW, L"Add selected app",
-                                    WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | WS_TABSTOP,
-                                    0, 0, 1, 1, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kAddApp)), instance_, nullptr);
-
     commandLabelCaption_ = CreateWindowExW(0, WC_STATICW, L"Name", WS_CHILD,
                                            0, 0, 1, 1, hwnd_, nullptr, instance_, nullptr);
     commandLabel_ = CreateWindowExW(0, WC_EDITW, L"", WS_CHILD | ES_AUTOHSCROLL | WS_TABSTOP,
@@ -380,21 +504,28 @@ void ShortcutEditor::create_controls() {
                                            WS_CHILD | BS_OWNERDRAW | WS_TABSTOP, 0, 0, 1, 1,
                                            hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kRemoveCommand)), instance_, nullptr);
 
-    const std::array<HWND, 16> controls{
-        appsTab_, commandsTab_, search_, appList_, appHint_, addAppButton_,
+    const std::array<HWND, 15> controls{
+        appsTab_, commandsTab_, search_, appList_, appHint_,
         commandLabelCaption_, commandLabel_, commandTargetCaption_, commandTarget_, browseButton_,
         commandArgumentsCaption_, commandArguments_, addCommandButton_, commandList_, removeCommandButton_};
     for (HWND control : controls) apply_font(control, font_);
+    apply_font(appHint_, captionFont_);
     for (HWND control : controls) apply_dark_theme(control);
 
     for (HWND list : {appList_, commandList_}) {
-        ListView_SetBkColor(list, RGB(17, 17, 19));
-        ListView_SetTextBkColor(list, RGB(17, 17, 19));
+        ListView_SetBkColor(list, RGB(0, 0, 0));
+        ListView_SetTextBkColor(list, RGB(0, 0, 0));
         ListView_SetTextColor(list, RGB(238, 238, 242));
     }
 
-    appImages_ = ImageList_Create(32, 32, ILC_COLOR32 | ILC_MASK, 64, 32);
-    ListView_SetImageList(appList_, appImages_, LVSIL_SMALL);
+    const float scale = dpi == 0 ? 1.0f : static_cast<float>(dpi) / 96.0f;
+    appImages_ = ImageList_Create(static_cast<int>(std::lround(32.0f * scale)),
+                                  static_cast<int>(std::lround(32.0f * scale)),
+                                  ILC_COLOR32 | ILC_MASK, 64, 32);
+    rowHeightImages_ = ImageList_Create(1, static_cast<int>(std::lround(68.0f * scale)),
+                                        ILC_COLOR32, 1, 1);
+    ListView_SetImageList(appList_, rowHeightImages_, LVSIL_SMALL);
+    ListView_SetImageList(commandList_, rowHeightImages_, LVSIL_SMALL);
     appImageCacheValid_ = appImages_ != nullptr;
 }
 
@@ -416,25 +547,30 @@ void ShortcutEditor::layout_controls() {
     MoveWindow(commandsTab_, pad + tabsWidth + gap, px(6.0f), tabsWidth, buttonHeight, TRUE);
 
     MoveWindow(search_, pad + px(10.0f), px(50.0f), width - pad * 2 - px(20.0f), px(34.0f), TRUE);
-    MoveWindow(appList_, pad, px(94.0f), width - pad * 2,
-               std::max(px(170.0f), height - px(158.0f)), TRUE);
-    ListView_SetColumnWidth(appList_, 0, std::max(1, width - pad * 2 - px(4.0f)));
-    MoveWindow(appHint_, pad, height - px(45.0f), width - px(156.0f), px(24.0f), TRUE);
-    MoveWindow(addAppButton_, width - px(146.0f), height - px(48.0f), px(136.0f), px(32.0f), TRUE);
+    MoveWindow(appList_, pad, px(98.0f), width - pad * 2,
+               std::max(px(170.0f), height - px(136.0f)), TRUE);
+    RECT appClient{};
+    GetClientRect(appList_, &appClient);
+    ListView_SetColumnWidth(appList_, 0, std::max(1L, appClient.right - px(2.0f) -
+        GetSystemMetricsForDpi(SM_CXVSCROLL, dpi == 0 ? 96 : dpi)));
+    MoveWindow(appHint_, pad + px(4.0f), height - px(28.0f), width - pad * 2, px(20.0f), TRUE);
 
     const int labelWidth = px(72.0f);
-    const int fieldLeft = pad + labelWidth;
-    MoveWindow(commandLabelCaption_, pad, px(43.0f), labelWidth, px(22.0f), TRUE);
-    MoveWindow(commandLabel_, fieldLeft, px(39.0f), width - fieldLeft - pad, px(30.0f), TRUE);
-    MoveWindow(commandTargetCaption_, pad, px(80.0f), labelWidth, px(22.0f), TRUE);
-    MoveWindow(commandTarget_, fieldLeft, px(76.0f), width - fieldLeft - px(78.0f), px(30.0f), TRUE);
-    MoveWindow(browseButton_, width - px(72.0f), px(76.0f), px(62.0f), px(30.0f), TRUE);
-    MoveWindow(commandArgumentsCaption_, pad, px(117.0f), labelWidth, px(22.0f), TRUE);
-    MoveWindow(commandArguments_, fieldLeft, px(113.0f), width - fieldLeft - pad, px(30.0f), TRUE);
-    MoveWindow(addCommandButton_, width - px(122.0f), px(151.0f), px(112.0f), buttonHeight, TRUE);
-    MoveWindow(commandList_, pad, px(187.0f), width - pad * 2,
-               std::max(px(120.0f), height - px(234.0f)), TRUE);
-    ListView_SetColumnWidth(commandList_, 0, std::max(1, width - pad * 2 - px(4.0f)));
+    const int fieldLeft = pad + labelWidth + px(10.0f);
+    MoveWindow(commandLabelCaption_, pad, px(59.0f), labelWidth, px(22.0f), TRUE);
+    MoveWindow(commandLabel_, fieldLeft, px(55.0f), width - fieldLeft - pad - px(10.0f), px(30.0f), TRUE);
+    MoveWindow(commandTargetCaption_, pad, px(104.0f), labelWidth, px(22.0f), TRUE);
+    MoveWindow(commandTarget_, fieldLeft, px(100.0f), width - fieldLeft - px(88.0f), px(30.0f), TRUE);
+    MoveWindow(browseButton_, width - px(72.0f), px(100.0f), px(62.0f), px(30.0f), TRUE);
+    MoveWindow(commandArgumentsCaption_, pad, px(149.0f), labelWidth, px(22.0f), TRUE);
+    MoveWindow(commandArguments_, fieldLeft, px(145.0f), width - fieldLeft - pad - px(10.0f), px(30.0f), TRUE);
+    MoveWindow(addCommandButton_, width - px(122.0f), px(189.0f), px(112.0f), buttonHeight, TRUE);
+    MoveWindow(commandList_, pad, px(235.0f), width - pad * 2,
+               std::max(px(120.0f), height - px(282.0f)), TRUE);
+    RECT commandClient{};
+    GetClientRect(commandList_, &commandClient);
+    ListView_SetColumnWidth(commandList_, 0, std::max(1L, commandClient.right - px(2.0f) -
+        GetSystemMetricsForDpi(SM_CXVSCROLL, dpi == 0 ? 96 : dpi)));
     MoveWindow(removeCommandButton_, width - px(136.0f), height - px(43.0f), px(126.0f), px(32.0f), TRUE);
 }
 
@@ -442,11 +578,11 @@ void ShortcutEditor::switch_page(bool commands) {
     commandsPage_ = commands;
     InvalidateRect(appsTab_, nullptr, TRUE);
     InvalidateRect(commandsTab_, nullptr, TRUE);
+    InvalidateRect(hwnd_, nullptr, TRUE);
     layout_controls();
     show_control(search_, !commands);
     show_control(appList_, !commands);
     show_control(appHint_, !commands);
-    show_control(addAppButton_, !commands);
     show_control(commandLabelCaption_, commands);
     show_control(commandLabel_, commands);
     show_control(commandTargetCaption_, commands);
@@ -563,7 +699,7 @@ void ShortcutEditor::finish_app_discovery() {
         return _wcsicmp(left.label.c_str(), right.label.c_str()) < 0;
     });
     appImageCacheValid_ = appImages_ != nullptr;
-    set_text(appHint_, L"Check an app to show it.");
+    set_text(appHint_, L"Select apps to show in the Apps widget.");
     if (!commandsPage_) populate_apps();
 }
 
@@ -615,23 +751,16 @@ bool ShortcutEditor::append_app(const std::filesystem::path& path) {
 void ShortcutEditor::populate_apps() {
     if (!appList_) return;
     std::wstring query = text_of(search_);
-    refreshing_ = true;
     ListView_DeleteAllItems(appList_);
     for (std::size_t index = 0; index < apps_.size(); ++index) {
         const auto& app = apps_[index];
         if (!visible_match(query, app)) continue;
-        LVITEMW item{LVIF_TEXT | LVIF_IMAGE | LVIF_PARAM};
+        LVITEMW item{LVIF_TEXT | LVIF_PARAM};
         item.iItem = ListView_GetItemCount(appList_);
         item.pszText = const_cast<LPWSTR>(app.label.c_str());
-        item.iImage = app.imageIndex;
         item.lParam = static_cast<LPARAM>(index);
-        const int row = ListView_InsertItem(appList_, &item);
-        const bool checked = std::ranges::any_of(settings_.appShortcuts, [&](const ShortcutSetting& shortcut) {
-            return shortcut.enabled && same_path(shortcut.target, app.path);
-        });
-        ListView_SetCheckState(appList_, row, checked ? TRUE : FALSE);
+        ListView_InsertItem(appList_, &item);
     }
-    refreshing_ = false;
 }
 
 void ShortcutEditor::populate_commands() {
@@ -648,18 +777,7 @@ void ShortcutEditor::populate_commands() {
     }
 }
 
-void ShortcutEditor::add_selected_app() {
-    const int row = ListView_GetNextItem(appList_, -1, LVNI_SELECTED);
-    if (row < 0) return;
-    if (!ListView_GetCheckState(appList_, row)) {
-        ListView_SetCheckState(appList_, row, TRUE);
-    } else {
-        update_app_check(row, true);
-    }
-}
-
 void ShortcutEditor::update_app_check(int item, bool checked) {
-    if (refreshing_) return;
     const int index = item_data(appList_, item);
     if (index < 0 || index >= static_cast<int>(apps_.size())) return;
     const auto& app = apps_[static_cast<std::size_t>(index)];
@@ -672,9 +790,6 @@ void ShortcutEditor::update_app_check(int item, bool checked) {
             return !shortcut.enabled || shortcut.target.empty();
         });
         if (free == settings_.appShortcuts.end()) {
-            refreshing_ = true;
-            ListView_SetCheckState(appList_, item, FALSE);
-            refreshing_ = false;
             MessageBoxW(hwnd_, L"The Apps widget can contain up to four apps.", L"Apps", MB_OK | MB_ICONINFORMATION);
             return;
         }
@@ -763,10 +878,22 @@ void ShortcutEditor::destroy_resources() {
         ImageList_Destroy(appImages_);
         appImages_ = nullptr;
     }
+    if (rowHeightImages_) {
+        ImageList_Destroy(rowHeightImages_);
+        rowHeightImages_ = nullptr;
+    }
     for (auto& cached : appCache_) cached.app.imageIndex = -1;
     if (font_) {
         DeleteObject(font_);
         font_ = nullptr;
+    }
+    if (titleFont_) {
+        DeleteObject(titleFont_);
+        titleFont_ = nullptr;
+    }
+    if (captionFont_) {
+        DeleteObject(captionFont_);
+        captionFont_ = nullptr;
     }
     if (backgroundBrush_) {
         DeleteObject(backgroundBrush_);
@@ -777,7 +904,7 @@ void ShortcutEditor::destroy_resources() {
         fieldBrush_ = nullptr;
     }
     appImageCacheValid_ = false;
-    appsTab_ = commandsTab_ = search_ = appList_ = appHint_ = addAppButton_ = nullptr;
+    appsTab_ = commandsTab_ = search_ = appList_ = appHint_ = nullptr;
     commandLabelCaption_ = commandLabel_ = commandTargetCaption_ = commandTarget_ = nullptr;
     commandArgumentsCaption_ = commandArguments_ = browseButton_ = addCommandButton_ = nullptr;
     commandList_ = removeCommandButton_ = nullptr;
