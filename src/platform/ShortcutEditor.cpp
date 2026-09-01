@@ -140,7 +140,20 @@ void ShortcutEditor::show_embedded(HWND parent, HINSTANCE instance, RECT bounds,
 }
 
 void ShortcutEditor::hide() {
-    if (hwnd_) ShowWindow(hwnd_, SW_HIDE);
+    if (!hwnd_) return;
+    const HWND parent = owner_;
+    KillTimer(hwnd_, kAppLoadTimer);
+    appLoading_ = false;
+    appIterator_.reset();
+    appRoots_.clear();
+    nextAppCache_.clear();
+    // Destroy the embedded HWND so its native redirection surface cannot remain
+    // composited behind the island after the editor is closed.
+    DestroyWindow(hwnd_);
+    if (parent) {
+        RedrawWindow(parent, nullptr, nullptr,
+                     RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+    }
 }
 
 void ShortcutEditor::resize_embedded(RECT bounds, int radius) {
@@ -408,7 +421,11 @@ void ShortcutEditor::start_app_discovery() {
     if (!appCache_.empty()) {
         apps_.clear();
         apps_.reserve(appCache_.size());
-        for (const auto& entry : appCache_) apps_.push_back(entry.app);
+        for (const auto& entry : appCache_) {
+            auto app = entry.app;
+            if (!appImageCacheValid_) app.imageIndex = -1;
+            apps_.push_back(std::move(app));
+        }
         std::ranges::sort(apps_, [](const InstalledApp& left, const InstalledApp& right) {
             return _wcsicmp(left.label.c_str(), right.label.c_str()) < 0;
         });
