@@ -775,13 +775,18 @@ void OverlayWindow::open_shortcut_editor() {
     apply_settings_to_render_state();
     set_expanded(true);
     update_shortcut_editor_bounds();
-    const auto island = renderer_.island_rect(renderState_);
     const float s = renderState_.dpiScale;
+    const float width = kExpandedWidth * s;
+    const float height = kSettingsHeight * s;
+    const float left = (static_cast<float>(renderer_.width()) - width) * 0.5f;
+    const float top = renderState_.expandUp
+        ? static_cast<float>(renderer_.height()) - 8.0f * s - height
+        : 8.0f * s;
     const RECT bounds{
-        static_cast<LONG>(std::lround(island.left)),
-        static_cast<LONG>(std::lround(island.top + 64.0f * s)),
-        static_cast<LONG>(std::lround(island.right)),
-        static_cast<LONG>(std::lround(island.bottom))};
+        static_cast<LONG>(std::lround(left)),
+        static_cast<LONG>(std::lround(top + 64.0f * s)),
+        static_cast<LONG>(std::lround(left + width)),
+        static_cast<LONG>(std::lround(top + height))};
     shortcutEditor_->show_embedded(hwnd_, instance_, bounds, static_cast<int>(24.0f * s), [this] {
         settings_ = Settings::load();
         apply_settings_to_render_state();
