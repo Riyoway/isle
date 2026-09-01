@@ -367,7 +367,15 @@ LRESULT ShortcutEditor::handle_message(UINT message, WPARAM wParam, LPARAM lPara
                     const UINT dpi = GetDpiForWindow(hwnd_);
                     const float scale = dpi == 0 ? 1.0f : static_cast<float>(dpi) / 96.0f;
                     const auto px = [scale](float value) { return static_cast<int>(std::lround(value * scale)); };
-                    RECT row = draw->nmcd.rc;
+                    const int item = static_cast<int>(draw->nmcd.dwItemSpec);
+                    RECT row{};
+                    if (!ListView_GetItemRect(header->hwndFrom, item, &row, LVIR_BOUNDS)) {
+                        row = draw->nmcd.rc;
+                    }
+                    RECT client{};
+                    GetClientRect(header->hwndFrom, &client);
+                    row.left = client.left;
+                    row.right = client.right;
                     FillRect(draw->nmcd.hdc, &row, backgroundBrush_);
                     RECT card{row.left + px(4.0f), row.top + px(4.0f),
                               row.right - px(4.0f), row.bottom - px(4.0f)};
@@ -377,8 +385,7 @@ LRESULT ShortcutEditor::handle_message(UINT message, WPARAM wParam, LPARAM lPara
                     stroke_rounded(draw->nmcd.hdc, card, px(18.0f), RGB(29, 29, 32));
                     SetBkMode(draw->nmcd.hdc, TRANSPARENT);
 
-                    const int item = static_cast<int>(draw->nmcd.dwItemSpec);
-                    const int index = item_data(header->hwndFrom, item);
+                    const int index = static_cast<int>(draw->nmcd.lItemlParam);
                     if (header->hwndFrom == appList_ && index >= 0 && index < static_cast<int>(apps_.size())) {
                         const auto& app = apps_[static_cast<std::size_t>(index)];
                         const int iconSize = px(32.0f);
